@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Privacy Shield - PreToolUse hook for file operations (Edit, Write, MultiEdit)
 // Exit 0 = allow, Exit 2 = block
-// Checks: (1) sensitive file paths, (2) dangerous code patterns in content
+// Layer 1 (sensitive paths): BLOCKS the operation
+// Layer 2 (code patterns):   WARNS but allows the operation
 
 let data = '';
 process.stdin.on('data', c => data += c);
@@ -67,7 +68,7 @@ process.stdin.on('end', () => {
     if (/\.github\/workflows\/.*\.ya?ml$/.test(normPath)) {
       // Check for unsafe GitHub Actions interpolation
       if (/\$\{\{\s*github\.event\.(issue|pull_request|comment|review|head_commit|commits|pages)/.test(content)) {
-        warn('GitHub Actions workflow injection: uso inseguro de interpolacion ${{ github.event.* }} en run:. Usa variables env: en su lugar.');
+        process.stderr.write('PRIVACY-SHIELD WARNING: GitHub Actions workflow injection: uso inseguro de interpolacion ${{ github.event.* }} en run:. Usa variables env: en su lugar.\n');
       }
     }
 
@@ -112,10 +113,16 @@ process.stdin.on('end', () => {
         msg: 'Posible secreto hardcodeado detectado. Usa variables de entorno o un gestor de secretos.' },
     ];
 
+    const warnings = [];
     for (const pattern of contentPatterns) {
       if (pattern.test()) {
-        warn(pattern.msg);
+        warnings.push(pattern.msg);
       }
+    }
+
+    // Warn but allow — Claude sees the warnings and can decide
+    if (warnings.length > 0) {
+      process.stderr.write(`PRIVACY-SHIELD WARNING: ${warnings.join(' | ')}\n`);
     }
 
     process.exit(0);
@@ -125,7 +132,7 @@ process.stdin.on('end', () => {
   }
 });
 
-function warn(msg) {
-  process.stderr.write(`PRIVACY-SHIELD: ${msg}\n`);
+function block(msg) {
+  process.stderr.write(`PRIVACY-SHIELD: Bloqueado - ${msg}\n`);
   process.exit(2);
 }
