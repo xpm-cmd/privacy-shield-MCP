@@ -13,7 +13,7 @@ const STATE_DIR = join(homedir(), '.privacy-shield');
 const CLEANUP_MAX_AGE_DAYS = 30;
 const CLEANUP_PROBABILITY = 0.1; // 10% chance per run
 
-// ─── State file helpers ───
+// ─── State file helpers (Set-based, like security-guidance) ───
 
 function getStateFilePath(sessionId) {
   return join(STATE_DIR, `content_warnings_${sessionId || 'default'}.json`);
@@ -21,16 +21,16 @@ function getStateFilePath(sessionId) {
 
 function loadState(sessionId) {
   try {
-    return JSON.parse(readFileSync(getStateFilePath(sessionId), 'utf8'));
+    return new Set(JSON.parse(readFileSync(getStateFilePath(sessionId), 'utf8')));
   } catch {
-    return {};
+    return new Set();
   }
 }
 
 function saveState(sessionId, state) {
   try {
     mkdirSync(STATE_DIR, { recursive: true });
-    writeFileSync(getStateFilePath(sessionId), JSON.stringify(state));
+    writeFileSync(getStateFilePath(sessionId), JSON.stringify([...state]));
   } catch { /* best effort */ }
 }
 
@@ -72,10 +72,10 @@ process.stdin.on('end', () => {
     const norm = filePath.replace(/\\/g, '/').toLowerCase();
 
     const pathBlocks = [
-      [/(\/\.env|\/\.env\.\w+)$/, 'archivo .env'],
-      [/\/id_(rsa|ed25519|ecdsa|dsa)$/, 'clave SSH'],
+      [/(\/\.env|\/\.env\.\w+)$/, '.env file'],
+      [/\/id_(rsa|ed25519|ecdsa|dsa)$/, 'SSH key'],
       [/\/\.ssh\/(config|authorized_keys|known_hosts)$/, 'SSH config'],
-      [/\.(pem|pfx|p12)$/, 'certificado/clave privada'],
+      [/\.(pem|pfx|p12)$/, 'certificate/private key'],
       [/\/\.aws\/credentials$/, 'AWS credentials'],
       [/\/\.docker\/config\.json$/, 'Docker config'],
       [/\/\.kube\/config$/, 'Kube config'],
@@ -90,7 +90,7 @@ process.stdin.on('end', () => {
 
     for (const [regex, desc] of pathBlocks) {
       if (regex.test(norm)) {
-        process.stderr.write(`PRIVACY-SHIELD: Bloqueado escritura en ${desc}: ${filePath}\n`);
+        process.stderr.write(`PRIVACY-SHIELD: Blocked write to ${desc}: ${filePath}\n`);
         process.exit(2);
       }
     }
@@ -111,64 +111,64 @@ process.stdin.on('end', () => {
 
     if (!content) process.exit(0);
 
-    // Path-based content checks
-    const normPath = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
+    // Normalize path for warningKey (keep full path, just fix slashes)
+    const normPath = filePath.replace(/\\/g, '/');
 
     const contentPatterns = [
       // GitHub Actions injection (only for workflow files)
       { id: 'gha-injection',
         test: () => /\.github\/workflows\/.*\.ya?ml$/.test(normPath) &&
           /\$\{\{\s*github\.event\.(issue|pull_request|comment|review|head_commit|commits|pages)/.test(content),
-        msg: 'GitHub Actions workflow injection: uso inseguro de interpolacion ${{ github.event.* }} en run:. Usa variables env: en su lugar.' },
+        msg: 'GitHub Actions workflow injection: unsafe ${{ github.event.* }} interpolation in run:. Use env: variables instead.' },
 
       // Command injection
       { id: 'cmd-injection',
         test: () => content.includes('child_process.exec') || content.includes('execSync('),
-        msg: 'Command injection risk: child_process.exec/execSync. Usa execFile() o spawn() con argumentos separados.' },
+        msg: 'Command injection risk: child_process.exec/execSync detected. Use execFile() or spawn() with separate arguments.' },
 
       // Code injection
       { id: 'new-function',
         test: () => content.includes('new Function(') || content.includes('new Function ('),
-        msg: 'Code injection risk: new Function() ejecuta codigo arbitrario. Considera alternativas seguras.' },
+        msg: 'Code injection risk: new Function() can run arbitrary code. Consider safer alternatives.' },
       { id: 'eval',
         test: () => /\beval\s*\(/.test(content),
-        msg: 'Code injection risk: eval() ejecuta codigo arbitrario. Usa JSON.parse() para datos o alternativas seguras.' },
+        msg: 'Code injection risk: eval() can run arbitrary code. Use JSON.parse() for data or safer alternatives.' },
 
       // XSS
       { id: 'dangerously-set-innerhtml',
         test: () => content.includes('dangerouslySetInnerHTML'),
-        msg: 'XSS risk: dangerouslySetInnerHTML. Sanitiza con DOMPurify o usa alternativas seguras.' },
+        msg: 'XSS risk: dangerouslySetInnerHTML detected. Sanitize with DOMPurify or use safer alternatives.' },
       { id: 'document-write',
         test: () => content.includes('document.write'),
-        msg: 'XSS risk: document.write(). Usa metodos DOM como createElement/appendChild.' },
+        msg: 'XSS risk: document.write() detected. Use DOM methods like createElement/appendChild.' },
       { id: 'innerhtml-assign',
         test: () => /\.innerHTML\s*=/.test(content),
-        msg: 'XSS risk: innerHTML assignment. Usa textContent para texto plano o sanitiza con DOMPurify.' },
+        msg: 'XSS risk: innerHTML assignment detected. Use textContent for plain text or sanitize with DOMPurify.' },
 
       // Unsafe deserialization
       { id: 'pickle',
         test: () => /\bpickle\.(loads?|dumps?)\b/.test(content) || content.includes('import pickle'),
-        msg: 'Deserializacion insegura: pickle puede ejecutar codigo arbitrario. Usa JSON u otro formato seguro.' },
+        msg: 'Unsafe deserialization: pickle can run arbitrary code. Use JSON or another safe format.' },
 
       // Shell injection (Python)
       { id: 'os-system',
         test: () => content.includes('os.system(') || content.includes('from os import system'),
-        msg: 'Shell injection risk: os.system(). Usa subprocess.run() con argumentos como lista.' },
+        msg: 'Shell injection risk: os.system() detected. Use subprocess.run() with list arguments.' },
 
       // Shell injection (Python subprocess with shell=True)
       { id: 'subprocess-shell',
         test: () => /subprocess\.(call|run|Popen)\s*\(.*shell\s*=\s*True/s.test(content),
-        msg: 'Shell injection risk: subprocess con shell=True. Usa shell=False con argumentos como lista.' },
+        msg: 'Shell injection risk: subprocess with shell=True detected. Use shell=False with list arguments.' },
 
       // SQL injection
       { id: 'sql-fstring',
         test: () => /f["'].*SELECT\b.*\{/.test(content) || /f["'].*INSERT\b.*\{/.test(content) || /f["'].*UPDATE\b.*\{/.test(content) || /f["'].*DELETE\b.*\{/.test(content),
-        msg: 'SQL injection risk: f-string con query SQL. Usa parametros (?) o un ORM.' },
+        msg: 'SQL injection risk: f-string with SQL query detected. Use parameterized queries (?) or an ORM.' },
 
       // Hardcoded secrets
       { id: 'hardcoded-secret',
         test: () => /(password|secret|api_key|apikey|token)\s*=\s*["'][^"']{8,}["']/i.test(content) && !/example|test|placeholder|changeme|xxx|dummy/i.test(content),
-        msg: 'Posible secreto hardcodeado detectado. Usa variables de entorno o un gestor de secretos.' },
+        msg: 'Possible hardcoded secret detected. Use environment variables or a secret manager.' },
     ];
 
     // Find all matching patterns
@@ -181,8 +181,8 @@ process.stdin.on('end', () => {
 
     for (const pattern of matched) {
       const warningKey = `${normPath}-${pattern.id}`;
-      if (!state[warningKey]) {
-        state[warningKey] = Date.now();
+      if (!state.has(warningKey)) {
+        state.add(warningKey);
         newWarnings.push(pattern.msg);
       }
     }

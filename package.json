@@ -1,0 +1,8 @@
+{
+  "name": "privacy-shield",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "node scripts/test-hook-pre-file.js"
+  }
+}
