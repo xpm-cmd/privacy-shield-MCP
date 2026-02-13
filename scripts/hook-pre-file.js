@@ -61,9 +61,6 @@ process.stdin.on('end', () => {
 
     if (!content) process.exit(0);
 
-    // Skip content checks for documentation/config files (avoid false positives)
-    if (/\.(md|mdx|txt|rst|adoc|log|csv|json|ya?ml|toml|ini|cfg|conf|xml|html?|svg)$/i.test(norm)) process.exit(0);
-
     // Path-based content checks
     const normPath = filePath.replace(/\\/g, '/').replace(/^\/+/, '');
 
