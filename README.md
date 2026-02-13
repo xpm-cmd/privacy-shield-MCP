@@ -72,9 +72,10 @@ Blocks dangerous shell commands before execution:
 
 ### File Operation Validation
 
-Blocks writes to sensitive files and detects dangerous code patterns in source files. Read operations are always allowed. Documentation files (.md, .txt, .json, .yml, etc.) are excluded from content scanning to avoid false positives.
+Two layers of protection for file operations (Write/Edit/MultiEdit). Read operations are always allowed.
 
-**Path-based blocks** (Write/Edit/MultiEdit):
+**Layer 1: Path-based blocks** always block writes to sensitive files:
+
 
 | Category | Files |
 |---|---|
@@ -85,7 +86,9 @@ Blocks writes to sensitive files and detects dangerous code patterns in source f
 | Auth configs | `.netrc`, `.npmrc`, `.pypirc` |
 | Secrets | `wallet.dat`, `.gnupg/*.key`, `.password-store/`, `.config/gh/hosts.yml` |
 
-**Content-based blocks** (scans source code being written):
+**Layer 2: Content pattern detection** uses a "block once, then allow" approach. The first time a dangerous pattern is detected in a file, the operation is blocked and a warning is shown. On the next attempt for the same file and pattern, the operation is allowed. This gives Claude a chance to review the warning and decide whether to proceed. State is tracked per session in `~/.privacy-shield/content_warnings_{session_id}.json` and cleaned up after 30 days.
+
+Content patterns detected:
 
 | Pattern | Risk |
 |---|---|
