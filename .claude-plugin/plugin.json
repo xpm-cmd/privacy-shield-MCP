@@ -1,0 +1,10 @@
+{
+  "name": "privacy-shield",
+  "version": "1.0.0",
+  "description": "5-layer security: privacy scanning, network validation, execution analysis, anti-exfiltration, and audit logging",
+  "author": {
+    "name": "AX9"
+  },
+  "license": "MIT",
+  "keywords": ["security", "privacy", "hooks", "mcp", "audit"]
+}
