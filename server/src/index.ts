@@ -24,7 +24,7 @@ import { analyzePrivacy, analyzeFilePath } from './privacy.js';
 // Layer 2: Network
 import { analyzeNetwork, isDomainSafeForDataSending } from './network.js';
 // Layer 3: Execution
-import { analyzeBash, analyzePromptInjection, analyzeCode, quickScanPromptInjection } from './execution.js';
+import { analyzeBash, analyzePromptInjection, analyzeCode } from './execution.js';
 // Layer 4: Anti-Exfiltration
 import { analyzeExfiltration, checkFileOperation } from './exfiltration.js';
 // Layer 5: Audit
@@ -32,7 +32,7 @@ import { logEntry, getSessionSummary, getRecentLogs, getLogPath, setSessionId } 
 // Layer 6: Adversarial
 import { ThreatDetector, CollusionDetector, MemoryQuorum } from './adversarial.js';
 // Layer 7: Supply Chain
-import { analyzeSupplyChain, analyzePackageJson, analyzeRepoFiles, analyzeInstallCommand } from './supply-chain.js';
+import { analyzeSupplyChain, analyzePackageJson, analyzeRepoFiles } from './supply-chain.js';
 // Stats
 import { recordScan, getStats, getStatsSummary, flushStats } from './stats.js';
 // Gates

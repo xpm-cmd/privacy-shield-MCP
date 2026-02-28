@@ -92,6 +92,36 @@ const BASH_PATTERNS: BashPattern[] = [
   { pattern: /echo\s+.*\|\s*base64\s+-d\s*\|\s*(bash|sh)/, risk: "critical", desc: "Decodificacion base64 a shell" },
   { pattern: /eval\s+["']\$\(/, risk: "high", desc: "Evaluacion dinamica de subshell" },
   { pattern: /printf\s+.*\\x[0-9a-f].*\|\s*(bash|sh)/, risk: "critical", desc: "Ejecucion de shellcode hex-encoded" },
+
+  // === Windows-specific patterns ===
+
+  // Destructivos Windows
+  { pattern: /del\s+\/[fFsS]\s+.*[/\\][*.]/, risk: "critical", desc: "Eliminacion recursiva forzada (Windows del /F /S)" },
+  { pattern: /rd\s+\/[sS]\s+\/[qQ]\s+[A-Z]:\\/i, risk: "critical", desc: "Eliminacion recursiva de directorio raiz (Windows rd /S /Q)" },
+  { pattern: /rmdir\s+\/[sS]\s+\/[qQ]\s+[A-Z]:\\/i, risk: "critical", desc: "Eliminacion recursiva de directorio (Windows rmdir /S /Q)" },
+  { pattern: /format\s+[A-Z]:\s*/i, risk: "critical", desc: "Formateo de disco (Windows format)" },
+
+  // PowerShell ejecucion remota
+  { pattern: /powershell\s+.*-[eE](?:nc(?:odedCommand)?)\s+/i, risk: "critical", desc: "PowerShell con comando codificado en Base64 (-EncodedCommand)" },
+  { pattern: /Invoke-WebRequest\s+.*\|\s*(?:Invoke-Expression|iex)/i, risk: "critical", desc: "Descarga y ejecucion remota via PowerShell (IWR | IEX)" },
+  { pattern: /iwr\s+.*\|\s*iex/i, risk: "critical", desc: "Descarga y ejecucion remota via PowerShell (IWR | IEX alias)" },
+  { pattern: /Invoke-Expression\s*\(\s*\(?\s*New-Object/i, risk: "critical", desc: "Ejecucion remota via WebClient de .NET" },
+  { pattern: /DownloadString\s*\(\s*['"]https?:/, risk: "critical", desc: "Descarga de script remoto via WebClient" },
+
+  // PowerShell reverse shells
+  { pattern: /New-Object\s+System\.Net\.Sockets\.TCPClient/i, risk: "critical", desc: "Reverse shell PowerShell via TCPClient" },
+  { pattern: /\$client\s*=\s*New-Object.*TCPClient/i, risk: "critical", desc: "Reverse shell PowerShell (patron de variable)" },
+
+  // PowerShell persistencia y evasion
+  { pattern: /Set-ExecutionPolicy\s+(Bypass|Unrestricted)/i, risk: "high", desc: "Bypass de politica de ejecucion de PowerShell" },
+  { pattern: /Add-MpPreference\s+.*-ExclusionPath/i, risk: "high", desc: "Agregar exclusion a Windows Defender" },
+  { pattern: /Set-MpPreference\s+.*-DisableRealtimeMonitoring\s+\$true/i, risk: "critical", desc: "Desactivacion de Windows Defender en tiempo real" },
+  { pattern: /reg\s+add\s+.*\\CurrentVersion\\Run/i, risk: "high", desc: "Persistencia via registro de Windows (autorun)" },
+  { pattern: /schtasks\s+\/create/i, risk: "medium", desc: "Creacion de tarea programada (Windows schtasks)" },
+
+  // Windows exfiltracion
+  { pattern: /certutil\s+.*-urlcache/i, risk: "high", desc: "Descarga de archivo via certutil (tecnica LOLBIN)" },
+  { pattern: /bitsadmin\s+.*\/transfer/i, risk: "high", desc: "Descarga de archivo via BITS (tecnica LOLBIN)" },
 ];
 
 // ============================================================

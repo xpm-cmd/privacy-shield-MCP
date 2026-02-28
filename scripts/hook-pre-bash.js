@@ -9,7 +9,7 @@
 // - Per-argument validation (null bytes, unquoted metacharacters)
 
 const { readFileSync } = require('fs');
-const { join } = require('path');
+const { join, basename } = require('path');
 const { homedir } = require('os');
 
 const CONFIG_PATH = join(homedir(), '.privacy-shield', 'config.json');
@@ -27,17 +27,26 @@ function loadConfig() {
 // Factory presets for allowlist mode
 const PRESETS = {
   development: [
+    // Cross-platform
     'git', 'npm', 'npx', 'yarn', 'pnpm', 'bun', 'node', 'tsc', 'tsx',
-    'vitest', 'jest', 'eslint', 'prettier', 'ls', 'cat', 'head', 'tail',
-    'grep', 'rg', 'find', 'wc', 'sort', 'uniq', 'diff', 'echo', 'printf',
-    'mkdir', 'cp', 'mv', 'touch', 'pwd', 'which', 'env', 'python', 'python3',
+    'vitest', 'jest', 'eslint', 'prettier', 'python', 'python3',
     'pip', 'pip3', 'uv', 'cargo', 'rustc', 'go', 'make', 'cmake',
     'docker', 'docker-compose', 'curl', 'wget', 'ssh', 'scp',
+    // Unix
+    'ls', 'cat', 'head', 'tail', 'grep', 'rg', 'find', 'wc', 'sort',
+    'uniq', 'diff', 'echo', 'printf', 'mkdir', 'cp', 'mv', 'touch',
+    'pwd', 'which', 'env',
+    // Windows equivalents
+    'dir', 'type', 'more', 'findstr', 'where', 'copy', 'move', 'md',
+    'set', 'cls', 'powershell', 'pwsh', 'code',
   ],
   'read-only': [
+    // Unix
     'ls', 'cat', 'head', 'tail', 'grep', 'rg', 'find', 'wc', 'sort',
     'uniq', 'diff', 'echo', 'pwd', 'which', 'env', 'file', 'stat',
     'git log', 'git status', 'git diff', 'git branch', 'git show',
+    // Windows equivalents
+    'dir', 'type', 'more', 'findstr', 'where', 'set',
   ],
 };
 
@@ -62,7 +71,10 @@ function checkAllowlist(command, config) {
   if (!firstCmd) return null;
 
   // Check if the base command is in the allowlist
-  const baseName = firstCmd.split('/').pop(); // handle /usr/bin/git -> git
+  // Use path.basename for cross-platform: /usr/bin/git -> git, C:\Program Files\Git\bin\git.exe -> git.exe -> git
+  let baseName = basename(firstCmd);
+  // Strip .exe/.cmd/.bat suffix on Windows
+  baseName = baseName.replace(/\.(exe|cmd|bat|ps1)$/i, '');
   if (allowed.has(baseName)) return null; // Allowed
 
   return `Comando "${baseName}" no esta en la allowlist (preset: ${preset}). Configura en ${CONFIG_PATH}`;
@@ -191,6 +203,24 @@ process.stdin.on('end', () => {
     // ── High: Firewall disable ──
     [/iptables\s+.*-F/, 'Bloqueado flush de firewall'],
     [/\bufw\s+disable\b/, 'Bloqueado desactivacion de firewall'],
+
+    // ── Windows: Destructive ──
+    [/del\s+\/[fFsS].*[/\\][*.]/, 'Bloqueado eliminacion recursiva (Windows del /F /S)'],
+    [/rd\s+\/[sS]\s+\/[qQ]\s+[A-Z]:\\/i, 'Bloqueado eliminacion de directorio raiz (Windows)'],
+    [/rmdir\s+\/[sS]\s+\/[qQ]\s+[A-Z]:\\/i, 'Bloqueado eliminacion de directorio raiz (Windows)'],
+    [/format\s+[A-Z]:\s*/i, 'Bloqueado formateo de disco (Windows)'],
+
+    // ── Windows: Remote execution ──
+    [/powershell\s+.*-[eE](?:nc(?:odedCommand)?)\s+/i, 'Bloqueado PowerShell con comando codificado'],
+    [/Invoke-WebRequest\s+.*\|\s*(?:Invoke-Expression|iex)/i, 'Bloqueado descarga+ejecucion PowerShell (IWR|IEX)'],
+    [/iwr\s+.*\|\s*iex/i, 'Bloqueado descarga+ejecucion PowerShell (alias)'],
+    [/DownloadString\s*\(\s*['"]https?:/i, 'Bloqueado descarga de script remoto via WebClient'],
+
+    // ── Windows: Reverse shell ──
+    [/New-Object\s+System\.Net\.Sockets\.TCPClient/i, 'Bloqueado reverse shell PowerShell'],
+
+    // ── Windows: Security bypass ──
+    [/Set-MpPreference\s+.*-DisableRealtimeMonitoring\s+\$true/i, 'Bloqueado desactivacion de Windows Defender'],
   ];
 
   for (const [regex, message] of rules) {

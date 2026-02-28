@@ -1,6 +1,6 @@
 {
   "name": "privacy-shield-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "MCP Server de protección de privacidad y seguridad para Claude Code",
   "type": "module",
   "main": "dist/index.js",
