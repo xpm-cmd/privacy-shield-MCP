@@ -1,10 +1,10 @@
 {
   "name": "privacy-shield",
-  "version": "1.0.0",
-  "description": "5-layer security: privacy scanning, network validation, execution analysis, anti-exfiltration, and audit logging",
+  "version": "2.0.0",
+  "description": "7-layer security: privacy scanning, network validation, execution analysis, anti-exfiltration, audit logging, adversarial multi-agent protection, and supply chain scanning. 21 MCP tools + 4 hooks. Cross-platform (macOS, Linux, Windows).",
   "author": {
     "name": "AX9"
   },
   "license": "MIT",
-  "keywords": ["security", "privacy", "hooks", "mcp", "audit"]
+  "keywords": ["security", "privacy", "hooks", "mcp", "audit", "supply-chain", "adversarial", "prompt-injection"]
 }

@@ -1,8 +1,10 @@
 {
   "name": "privacy-shield",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
-    "test": "node scripts/test-hook-pre-file.js"
+    "test": "cd server && npm test",
+    "test:hooks": "node scripts/test-all-hooks.js",
+    "build": "cd server && npm run build"
   }
 }

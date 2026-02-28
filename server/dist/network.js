@@ -52,9 +52,6 @@ const SUSPICIOUS_URL_PATTERNS = [
     { pattern: /%[0-9a-f]{2}%[0-9a-f]{2}%[0-9a-f]{2}/i, reason: "URL con encoding excesivo (posible ofuscación)" },
     { pattern: /https?:\/\/[^/]*--[^/]*\./i, reason: "Dominio con doble guión (posible punycode attack)" },
 ];
-// ============================================================
-// Funciones de análisis
-// ============================================================
 function extractDomain(url) {
     try {
         const parsed = new URL(url);
@@ -150,6 +147,9 @@ function analyzeUrl(url) {
     }
     return { url, status, risk, reasons };
 }
+// ============================================================
+// Funciones de análisis (API pública)
+// ============================================================
 export function analyzeNetwork(text) {
     // Extraer URLs del texto
     const urlRegex = /https?:\/\/[^\s<>"'{}\[\]|\\^`]+/gi;

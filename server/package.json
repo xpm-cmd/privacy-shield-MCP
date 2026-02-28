@@ -1,6 +1,6 @@
 {
   "name": "privacy-shield-mcp",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "MCP Server de protección de privacidad y seguridad para Claude Code",
   "type": "module",
   "main": "dist/index.js",
@@ -10,7 +10,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
@@ -19,8 +21,9 @@
     "node": ">=18.0.0"
   },
   "devDependencies": {
-    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0",
     "tsx": "^4.7.0",
-    "@types/node": "^20.0.0"
+    "typescript": "^5.3.0",
+    "vitest": "^4.0.18"
   }
 }

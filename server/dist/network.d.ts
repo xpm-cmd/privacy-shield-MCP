@@ -8,26 +8,28 @@
  * - Detección de IPs directas sospechosas
  * - Lista blanca/negra configurable
  */
-import type { RiskLevel } from "./privacy.js";
-export interface UrlFinding {
+import type { RiskLevel } from './types.js';
+interface UrlAnalysis {
     url: string;
-    status: "safe" | "blocked" | "suspicious" | "warning";
+    status: string;
     risk: RiskLevel;
     reasons: string[];
 }
-export interface NetworkResult {
+interface NetworkResult {
     safe: boolean;
     risk_level: RiskLevel;
-    urls_analyzed: UrlFinding[];
+    urls_analyzed: UrlAnalysis[];
     domains_contacted: string[];
     summary: string;
     recommendations: string[];
+}
+interface DomainSafetyResult {
+    safe: boolean;
+    reason: string;
 }
 export declare function analyzeNetwork(text: string): NetworkResult;
 /**
  * Verifica si un dominio destino es seguro para enviar datos
  */
-export declare function isDomainSafeForDataSending(domain: string): {
-    safe: boolean;
-    reason: string;
-};
+export declare function isDomainSafeForDataSending(domain: string): DomainSafetyResult;
+export {};

@@ -1,29 +1,52 @@
-# Privacy Shield
+# Privacy Shield v2
 
-A Claude Code plugin that provides 5-layer security protection through real-time hooks and 14 MCP tools.
+A Claude Code plugin providing **7-layer security protection** through real-time hooks and **21 MCP tools**. Cross-platform: macOS, Linux, and Windows.
 
 ## Installation
+
+### macOS / Linux
 
 1. Copy the plugin to your Claude Code plugins cache:
 
 ```bash
-mkdir -p ~/.claude/plugins/cache/local/privacy-shield/1.0.0
-cp -r . ~/.claude/plugins/cache/local/privacy-shield/1.0.0/
+mkdir -p ~/.claude/plugins/cache/local/privacy-shield/2.0.0
+cp -r . ~/.claude/plugins/cache/local/privacy-shield/2.0.0/
 ```
 
 2. Copy hidden files explicitly (dotfiles may be skipped by `cp -r`):
 
 ```bash
-cp -r .claude-plugin ~/.claude/plugins/cache/local/privacy-shield/1.0.0/
-cp .mcp.json ~/.claude/plugins/cache/local/privacy-shield/1.0.0/
+cp -r .claude-plugin ~/.claude/plugins/cache/local/privacy-shield/2.0.0/
+cp .mcp.json ~/.claude/plugins/cache/local/privacy-shield/2.0.0/
 ```
 
 3. Install server dependencies:
 
 ```bash
-cd ~/.claude/plugins/cache/local/privacy-shield/1.0.0/server
+cd ~/.claude/plugins/cache/local/privacy-shield/2.0.0/server
 npm install --omit=dev
 ```
+
+### Windows (PowerShell)
+
+1. Copy the plugin:
+
+```powershell
+$dest = "$env:USERPROFILE\.claude\plugins\cache\local\privacy-shield\2.0.0"
+New-Item -ItemType Directory -Path $dest -Force
+Copy-Item -Recurse -Force * $dest
+Copy-Item -Recurse -Force .claude-plugin $dest
+Copy-Item -Force .mcp.json $dest
+```
+
+2. Install server dependencies:
+
+```powershell
+cd "$env:USERPROFILE\.claude\plugins\cache\local\privacy-shield\2.0.0\server"
+npm install --omit=dev
+```
+
+### All Platforms
 
 4. Register the plugin in `~/.claude/plugins/installed_plugins.json` under the `"plugins"` key:
 
@@ -31,10 +54,10 @@ npm install --omit=dev
 "privacy-shield@local": [
   {
     "scope": "user",
-    "installPath": "<absolute-path-to-cache>/local/privacy-shield/1.0.0",
-    "version": "1.0.0",
-    "installedAt": "2026-02-12T00:00:00.000Z",
-    "lastUpdated": "2026-02-12T00:00:00.000Z"
+    "installPath": "<absolute-path-to-cache>/local/privacy-shield/2.0.0",
+    "version": "2.0.0",
+    "installedAt": "2026-02-28T00:00:00.000Z",
+    "lastUpdated": "2026-02-28T00:00:00.000Z"
   }
 ]
 ```
@@ -60,22 +83,27 @@ Privacy Shield operates on two levels:
 
 ### Bash Command Validation
 
-Blocks dangerous shell commands before execution:
+Blocks dangerous shell commands before execution. Covers both Unix and Windows threats:
 
-| Category | Patterns |
-|---|---|
-| Destructive | `rm -rf /`, fork bombs, `mkfs`, `dd of=/dev/` |
-| Remote execution | `curl \| bash`, `wget \| python` |
-| Reverse shells | `bash -i >& /dev/tcp`, `nc -e /bin/bash` |
-| Exfiltration | `cat .env \| curl`, `base64 \| curl`, `tar \| nc` |
-| Firewall disable | `iptables -F`, `ufw disable` |
+| Category | Unix Patterns | Windows Patterns |
+|---|---|---|
+| Destructive | `rm -rf /`, fork bombs, `mkfs`, `dd of=/dev/` | `del /F /S`, `rd /S /Q C:\`, `format C:` |
+| Remote execution | `curl \| bash`, `wget \| python` | `IWR \| IEX`, `powershell -EncodedCommand`, `DownloadString` |
+| Reverse shells | `bash -i >& /dev/tcp`, `nc -e` | `New-Object TCPClient` |
+| Exfiltration | `cat .env \| curl`, `base64 \| curl` | `certutil -urlcache`, `bitsadmin /transfer` |
+| Security bypass | `iptables -F`, `ufw disable` | `Set-MpPreference -DisableRealtimeMonitoring` |
+
+Additional features:
+- **Configurable allowlist mode** via `~/.privacy-shield/config.json` with factory presets (`development`, `read-only`)
+- **Supply chain warnings** (informational, not blocking) for install commands (`npm install`, `pip install`, `git clone`)
+- **Typosquatting detection** for popular packages
+- **Argument validation**: null bytes, excessive backtick nesting
 
 ### File Operation Validation
 
 Two layers of protection for file operations (Write/Edit/MultiEdit). Read operations are always allowed.
 
 **Layer 1: Path-based blocks** always block writes to sensitive files:
-
 
 | Category | Files |
 |---|---|
@@ -86,20 +114,9 @@ Two layers of protection for file operations (Write/Edit/MultiEdit). Read operat
 | Auth configs | `.netrc`, `.npmrc`, `.pypirc` |
 | Secrets | `wallet.dat`, `.gnupg/*.key`, `.password-store/`, `.config/gh/hosts.yml` |
 
-**Layer 2: Content pattern detection** uses a "block once, then allow" approach. The first time a dangerous pattern is detected in a file, the operation is blocked and a warning is shown. On the next attempt for the same file and pattern, the operation is allowed. This gives Claude a chance to review the warning and decide whether to proceed. State is tracked per session in `~/.privacy-shield/content_warnings_{session_id}.json` and cleaned up after 30 days.
+**Layer 2: Content pattern detection** uses a "block once, then allow" approach. The first time a dangerous pattern is detected, the operation is blocked with a warning. On retry, it's allowed.
 
-Content patterns detected:
-
-| Pattern | Risk |
-|---|---|
-| `${{ github.event.* }}` in workflow files | GitHub Actions injection |
-| `child_process.exec`, `execSync` | Command injection |
-| `new Function()`, `eval()` | Code injection |
-| `dangerouslySetInnerHTML`, `document.write`, `.innerHTML =` | XSS |
-| `pickle.load`, `pickle.loads` | Unsafe deserialization |
-| `os.system()`, `subprocess(shell=True)` | Shell injection |
-| f-string SQL queries | SQL injection |
-| Hardcoded passwords, secrets, API keys | Credential exposure |
+**Layer 3: Diff size gate** warns on writes exceeding 300 lines (configurable).
 
 ### WebFetch Validation
 
@@ -116,7 +133,7 @@ Blocks outbound requests to dangerous destinations:
 
 When Claude requests permission for a tool, the hook injects a prompt requiring Claude to explain what the action does, why it is necessary, what it affects, and whether it is reversible.
 
-## MCP Tools (On-Demand Analysis)
+## MCP Tools (21 On-Demand Tools)
 
 ### Layer 1: Privacy
 
@@ -125,7 +142,7 @@ When Claude requests permission for a tool, the hook injects a prompt requiring 
 | `scan_privacy` | Detects PII, API keys, SSH keys, JWTs, passwords |
 | `check_file_sensitivity` | Checks if a file path is sensitive |
 | `redact_text` | Returns text with sensitive data replaced by placeholders |
-| `full_security_scan` | Runs all 4 analysis layers at once |
+| `full_security_scan` | Runs all analysis layers at once |
 
 ### Layer 2: Network
 
@@ -138,9 +155,9 @@ When Claude requests permission for a tool, the hook injects a prompt requiring 
 
 | Tool | Description |
 |---|---|
-| `analyze_command` | Detects dangerous bash patterns |
-| `detect_prompt_injection` | Identifies jailbreak and prompt injection attempts |
-| `scan_code` | Detects unsafe code patterns (eval, exec, XSS, deserialization) |
+| `analyze_command` | Detects dangerous bash/PowerShell patterns |
+| `detect_prompt_injection` | Identifies jailbreak and prompt injection attempts with confidence scoring |
+| `scan_code` | Detects unsafe code patterns (eval, exec, XSS, deserialization, GH Actions injection) |
 
 ### Layer 4: Anti-Exfiltration
 
@@ -157,29 +174,78 @@ When Claude requests permission for a tool, the hook injects a prompt requiring 
 | `audit_log` | Recent entries from persistent audit log |
 | `set_session` | Set custom session ID for grouping scans |
 
-The audit log persists at `~/.privacy-shield/audit.jsonl` across sessions.
+### Layer 6: Adversarial (Multi-Agent)
+
+| Tool | Description |
+|---|---|
+| `detect_adversarial` | Detect threats in agent action sequences (memory poisoning, privilege escalation) |
+| `check_collusion` | Verify agent interaction graph for collusion rings and coordinated behavior |
+| `quorum_vote` | Byzantine voting (2/3 majority) for validating cross-agent writes |
+
+### Layer 7: Supply Chain
+
+| Tool | Description |
+|---|---|
+| `scan_supply_chain` | Full analysis: install command + package.json + repo files |
+| `scan_package_json` | Detect dangerous install scripts, risky dependencies, typosquatting |
+| `scan_repo_files` | Scan for suspicious file formats (executables, serialized models, DLLs) |
+
+### Enforcement & Stats
+
+| Tool | Description |
+|---|---|
+| `run_gates` | Run enforcement gates (diff size, tool allowlist, secret detection) |
+| `detection_stats` | View scan metrics and detection rates |
 
 ## Plugin Structure
 
 ```
 privacy-shield/
 ├── .claude-plugin/
-│   └── plugin.json          # Plugin manifest
-├── .mcp.json                # MCP server definition
+│   └── plugin.json             # Plugin manifest (v2.0.0)
+├── .mcp.json                   # MCP server definition
 ├── hooks/
-│   └── hooks.json           # Hook event configuration
+│   └── hooks.json              # Hook event configuration
 ├── scripts/
-│   ├── hook-pre-bash.sh     # Bash command validator
-│   ├── hook-pre-file.js     # File path + content validator
-│   ├── hook-pre-file.sh     # Legacy file path validator (bash)
-│   ├── hook-pre-web.sh      # URL validator
-│   ├── hook-permission.js   # Permission context injector
-│   └── parse-input.js       # Shared JSON field extractor
+│   ├── hook-pre-bash.js        # Bash/PowerShell command validator
+│   ├── hook-pre-file.js        # File path + content + diff size validator
+│   ├── hook-pre-web.js         # URL validator
+│   ├── hook-permission.js      # Permission context injector
+│   └── parse-input.js          # Shared JSON field extractor
 └── server/
-    ├── package.json          # Node.js module config
-    ├── dist/                 # Compiled MCP server (14 tools)
-    └── node_modules/         # Runtime dependencies
+    ├── package.json            # Node.js module config
+    ├── tsconfig.json           # TypeScript configuration
+    ├── vitest.config.ts        # Test configuration
+    ├── src/                    # TypeScript source (11 modules)
+    │   ├── index.ts            # MCP server entry (21 tools)
+    │   ├── types.ts            # Shared type definitions
+    │   ├── privacy.ts          # Layer 1: PII & secrets
+    │   ├── network.ts          # Layer 2: URL & domain validation
+    │   ├── execution.ts        # Layer 3: Bash, prompt injection, code
+    │   ├── exfiltration.ts     # Layer 4: Data exfiltration
+    │   ├── audit.ts            # Layer 5: Logging & redaction
+    │   ├── adversarial.ts      # Layer 6: Multi-agent threats
+    │   ├── supply-chain.ts     # Layer 7: Package & repo scanning
+    │   ├── gates.ts            # Enforcement gates
+    │   ├── stats.ts            # Detection statistics
+    │   └── tests/              # 122 tests (vitest)
+    ├── dist/                   # Compiled JavaScript
+    └── node_modules/           # Runtime dependencies
 ```
+
+## Configuration
+
+Optional config file at `~/.privacy-shield/config.json`:
+
+```json
+{
+  "allowlist_mode": true,
+  "allowlist_preset": "development",
+  "allowlist_extra": ["custom-tool"]
+}
+```
+
+Presets: `development` (common dev tools), `read-only` (safe read commands only).
 
 ## Requirements
 

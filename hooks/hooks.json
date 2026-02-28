@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/hook-pre-bash.sh",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook-pre-bash.js",
             "timeout": 5
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/hook-pre-web.sh",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/scripts/hook-pre-web.js",
             "timeout": 5
           }
         ]

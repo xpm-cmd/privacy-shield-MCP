@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// Privacy Shield - PreToolUse hook for file operations (Edit, Write, MultiEdit)
+// Privacy Shield v2 - PreToolUse hook for file operations (Edit, Write, MultiEdit)
 // Exit 0 = allow, Exit 2 = block
 // Layer 1 (sensitive paths): ALWAYS blocks the operation
 // Layer 2 (code patterns):   Blocks FIRST time per file+rule, allows subsequent attempts
 //                             (security-guidance "warn once" pattern)
+// Layer 3 (diff size):       Warns on large writes (>300 lines) — first time only
 
 const { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, statSync } = require('fs');
 const { join } = require('path');
@@ -170,6 +171,22 @@ process.stdin.on('end', () => {
         test: () => /(password|secret|api_key|apikey|token)\s*=\s*["'][^"']{8,}["']/i.test(content) && !/example|test|placeholder|changeme|xxx|dummy/i.test(content),
         msg: 'Possible hardcoded secret detected. Use environment variables or a secret manager.' },
     ];
+
+    // ═══════════════════════════════════════════════
+    // LAYER 3: Diff size gate (warn on large writes)
+    // ═══════════════════════════════════════════════
+    const DIFF_SIZE_THRESHOLD = 300;
+    const lineCount = content.split('\n').length;
+    if (lineCount > DIFF_SIZE_THRESHOLD) {
+      const sizeKey = `${normPath}-diff-size-${lineCount > 1000 ? '1000+' : '300+'}`;
+      const sizeState = loadState(sessionId);
+      if (!sizeState.has(sizeKey)) {
+        sizeState.add(sizeKey);
+        saveState(sessionId, sizeState);
+        process.stderr.write(`PRIVACY-SHIELD: Large write detected (${lineCount} lines to ${filePath}). Consider splitting into smaller edits.\n`);
+        process.exit(2);
+      }
+    }
 
     // Find all matching patterns
     const matched = contentPatterns.filter(p => p.test());
