@@ -7,8 +7,8 @@
  * - Datos financieros
  * - Información de salud
  */
-export type RiskLevel = "safe" | "low" | "medium" | "high" | "critical";
-export interface Finding {
+import type { RiskLevel } from './types.js';
+interface PrivacyFinding {
     type: string;
     description: string;
     risk: RiskLevel;
@@ -16,18 +16,20 @@ export interface Finding {
     location: string;
     redacted: string;
 }
-export interface PrivacyResult {
+interface PrivacyResult {
     safe: boolean;
     risk_level: RiskLevel;
-    findings: Finding[];
+    findings: PrivacyFinding[];
     redacted_text: string;
     summary: string;
+}
+interface FilePathResult {
+    is_sensitive: boolean;
+    reason: string;
 }
 export declare function analyzePrivacy(text: string): PrivacyResult;
 /**
  * Analiza un archivo específico por datos sensibles
  */
-export declare function analyzeFilePath(filepath: string): {
-    is_sensitive: boolean;
-    reason: string;
-};
+export declare function analyzeFilePath(filepath: string): FilePathResult;
+export {};

@@ -7,7 +7,7 @@
  * - Detección de técnicas de exfiltración
  * - Audit log de conexiones externas
  */
-import { analyzeFilePath } from "./privacy.js";
+import { analyzeFilePath } from './privacy.js';
 const EXFIL_PATTERNS = [
     // Envío de archivos sensibles por red
     {

@@ -63,14 +63,14 @@ const DETECTION_PATTERNS = [
         type: "secret",
         pattern: /sk-ant-[a-zA-Z0-9_-]{20,}/g,
         risk: "critical",
-        redact: (m) => "sk-ant-****REDACTED****",
+        redact: (_m) => "sk-ant-****REDACTED****",
     },
     {
         name: "OpenAI API Key",
         type: "secret",
         pattern: /sk-(?!ant-)[a-zA-Z0-9]{20,}/g,
         risk: "critical",
-        redact: (m) => "sk-****REDACTED****",
+        redact: (_m) => "sk-****REDACTED****",
     },
     {
         name: "Variable .env con secreto",
@@ -109,7 +109,7 @@ const DETECTION_PATTERNS = [
         type: "pii",
         pattern: /\b\d{1,2}\.\d{3}\.\d{3}-[\dkK]\b/g,
         risk: "high",
-        redact: (m) => "**.***.***-*",
+        redact: (_m) => "**.***.***-*",
     },
     {
         name: "DNI/Cédula (genérico)",

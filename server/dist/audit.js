@@ -5,10 +5,12 @@
  * - Log rotativo con límite configurable
  * - Formato JSON Lines (.jsonl) para fácil parsing
  * - Resumen de sesión con estadísticas
+ * - Redacción automática de datos sensibles en logs
+ * - Anonimización de rutas de usuario
  */
-import { writeFile, readFile, mkdir, stat } from "node:fs/promises";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { writeFile, readFile, mkdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 // ============================================================
 // Configuración
 // ============================================================
@@ -46,6 +48,57 @@ async function rotateIfNeeded() {
     }
 }
 // ============================================================
+// Redacción y anonimización
+// ============================================================
+const SENSITIVE_KEYS = new Set([
+    'password', 'passwd', 'pwd', 'secret', 'token', 'apikey', 'api_key',
+    'apiKey', 'auth', 'authorization', 'credential', 'credentials',
+    'private_key', 'privateKey', 'access_key', 'accessKey', 'session',
+    'cookie', 'jwt', 'bearer', 'key',
+]);
+function isBase64(value) {
+    return value.length > 20 && /^[A-Za-z0-9+/]+=*$/.test(value) && value.length % 4 === 0;
+}
+export function redactObject(obj) {
+    if (obj === null || obj === undefined) {
+        return obj;
+    }
+    if (typeof obj === 'string') {
+        if (isBase64(obj)) {
+            return '[BASE64_REDACTED]';
+        }
+        return obj;
+    }
+    if (typeof obj !== 'object') {
+        return obj;
+    }
+    if (Array.isArray(obj)) {
+        return obj.map(item => redactObject(item));
+    }
+    const redacted = {};
+    for (const [k, v] of Object.entries(obj)) {
+        if (SENSITIVE_KEYS.has(k.toLowerCase())) {
+            redacted[k] = '[REDACTED]';
+        }
+        else if (typeof v === 'string' && isBase64(v)) {
+            redacted[k] = '[BASE64_REDACTED]';
+        }
+        else if (typeof v === 'object' && v !== null) {
+            redacted[k] = redactObject(v);
+        }
+        else {
+            redacted[k] = v;
+        }
+    }
+    return redacted;
+}
+export function anonymizePath(text) {
+    return text
+        .replace(/\/Users\/[a-zA-Z0-9_-]+\//g, '[PATH]/')
+        .replace(/\/home\/[a-zA-Z0-9_-]+\//g, '[PATH]/')
+        .replace(/C:\\Users\\[^\\]+\\/gi, '[PATH]\\');
+}
+// ============================================================
 // API pública
 // ============================================================
 export function setSessionId(id) {
@@ -60,11 +113,14 @@ export async function logEntry(entry) {
         session_id: currentSessionId,
         ...entry,
     };
+    // Keep original in sessionEntries for session_summary
     sessionEntries.push(fullEntry);
+    // Write sanitized version to file
+    const sanitized = redactObject(fullEntry);
     try {
         await ensureLogDir();
         await rotateIfNeeded();
-        await writeFile(LOG_FILE, JSON.stringify(fullEntry) + "\n", { flag: "a" });
+        await writeFile(LOG_FILE, JSON.stringify(sanitized) + "\n", { flag: "a" });
     }
     catch {
         // Fallo silencioso — el audit log no debe romper la funcionalidad principal
@@ -76,14 +132,20 @@ export function getSessionSummary() {
     let blockedCount = 0;
     const findings = [];
     for (const entry of sessionEntries) {
-        byRisk[entry.risk_level] = (byRisk[entry.risk_level] || 0) + 1;
-        if (entry.tool_name) {
-            byTool[entry.tool_name] = (byTool[entry.tool_name] || 0) + 1;
+        const riskLevel = entry.risk_level;
+        const toolName = entry.tool_name;
+        const safe = entry.safe;
+        const summary = entry.summary;
+        if (riskLevel) {
+            byRisk[riskLevel] = (byRisk[riskLevel] || 0) + 1;
         }
-        if (!entry.safe) {
+        if (toolName) {
+            byTool[toolName] = (byTool[toolName] || 0) + 1;
+        }
+        if (!safe) {
             blockedCount++;
             if (findings.length < 10) {
-                findings.push(entry.summary);
+                findings.push(summary);
             }
         }
     }
@@ -111,5 +173,13 @@ export async function getRecentLogs(count = 50) {
 }
 export function getLogPath() {
     return LOG_FILE;
+}
+export function createLogger(prefix) {
+    return {
+        info: (message, data) => logEntry({ event: 'log', level: 'info', prefix, message: anonymizePath(message), data: data ? redactObject(data) : undefined }),
+        warn: (message, data) => logEntry({ event: 'log', level: 'warn', prefix, message: anonymizePath(message), data: data ? redactObject(data) : undefined }),
+        error: (message, data) => logEntry({ event: 'log', level: 'error', prefix, message: anonymizePath(message), data: data ? redactObject(data) : undefined }),
+        child: (name) => createLogger(`${prefix}:${name}`),
+    };
 }
 //# sourceMappingURL=audit.js.map
