@@ -55,7 +55,7 @@ const SUSPICIOUS_URL_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\.(exe|bat|cmd|ps1|msi|scr|pif|com|vbs|wsf)(\?|$)/i, reason: "Descarga de ejecutable" },
   { pattern: /\.(sh|bash|zsh)(\?|$)/i, reason: "Descarga de script shell" },
   { pattern: /[?&](cmd|exec|command|run|eval)=/i, reason: "Parámetro de ejecución en query string" },
-  { pattern: /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/, reason: "IP directa en lugar de dominio" },
+  { pattern: /(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)/, reason: "IP directa en lugar de dominio" },
   { pattern: /%[0-9a-f]{2}%[0-9a-f]{2}%[0-9a-f]{2}/i, reason: "URL con encoding excesivo (posible ofuscación)" },
   { pattern: /https?:\/\/[^/]*--[^/]*\./i, reason: "Dominio con doble guión (posible punycode attack)" },
 ];

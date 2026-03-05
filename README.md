@@ -125,7 +125,7 @@ Blocks outbound requests to dangerous destinations:
 | Category | Examples |
 |---|---|
 | Exfiltration endpoints | `pastebin.com/raw`, `webhook.site`, `requestbin`, `ngrok`, `pipedream` |
-| URL shorteners | `bit.ly`, `tinyurl.com`, `t.co`, `goo.gl`, `is.gd` (14 total) |
+| URL shorteners | `bit.ly`, `tinyurl.com`, `t.co`, `goo.gl`, `is.gd` (17 total) |
 | Dangerous protocols | `javascript:`, `vbscript:`, `data:text/html:` |
 | High-risk TLDs | `.tk`, `.ml`, `.ga`, `.cf`, `.gq`, `.buzz`, `.zip`, `.mov` |
 
@@ -247,10 +247,25 @@ Optional config file at `~/.privacy-shield/config.json`:
 
 Presets: `development` (common dev tools), `read-only` (safe read commands only).
 
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [WINDOWS-SETUP.md](docs/WINDOWS-SETUP.md) | Step-by-step installation for Windows, PowerShell setup, common issues |
+| [MACOS-SETUP.md](docs/MACOS-SETUP.md) | Step-by-step installation for macOS, Homebrew, Gatekeeper issues |
+| [CONFIGURATION.md](docs/CONFIGURATION.md) | Allowlist mode, presets, custom commands, state files |
+| [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Common errors and how to fix them |
+
 ## Requirements
 
 - Node.js >= 18
 - Claude Code with plugin support
+
+## Disclaimer
+
+Privacy Shield is provided **as-is** without warranty of any kind. It is a best-effort tool and does not guarantee complete protection against all security threats. It is not a substitute for proper security audits, penetration testing, or secure development practices.
+
+The authors are not responsible for any damages, data loss, or security breaches that occur while using this software.
 
 ## License
 

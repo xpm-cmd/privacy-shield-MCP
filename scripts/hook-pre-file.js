@@ -9,6 +9,7 @@
 const { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, statSync } = require('fs');
 const { join } = require('path');
 const { homedir } = require('os');
+const { printBox, t } = require('./format-message.js');
 
 const STATE_DIR = join(homedir(), '.privacy-shield');
 const CLEANUP_MAX_AGE_DAYS = 30;
@@ -71,6 +72,8 @@ process.stdin.on('end', () => {
     // LAYER 1: Sensitive file path checks (ALWAYS BLOCK)
     // ═══════════════════════════════════════════════
     const norm = filePath.replace(/\\/g, '/').toLowerCase();
+    // Strip Windows drive letter for consistent matching (C:/path -> /path)
+    const normForCheck = norm.replace(/^[a-z]:/, '');
 
     const pathBlocks = [
       [/(\/\.env|\/\.env\.\w+)$/, '.env file'],
@@ -90,8 +93,10 @@ process.stdin.on('end', () => {
     ];
 
     for (const [regex, desc] of pathBlocks) {
-      if (regex.test(norm)) {
-        process.stderr.write(`PRIVACY-SHIELD: Blocked write to ${desc}: ${filePath}\n`);
+      if (regex.test(normForCheck)) {
+        printBox('block', `${t('Escritura bloqueada', 'Write blocked')}: ${desc}`,
+          t(`El archivo ${filePath} contiene credenciales o claves sensibles`, `File ${filePath} contains sensitive credentials or keys`),
+          t('Mueve el archivo fuera de rutas protegidas o usa variables de entorno', 'Move the file out of protected paths or use environment variables'));
         process.exit(2);
       }
     }
@@ -113,7 +118,7 @@ process.stdin.on('end', () => {
     if (!content) process.exit(0);
 
     // Normalize path for warningKey (keep full path, just fix slashes)
-    const normPath = filePath.replace(/\\/g, '/');
+    const normPath = filePath.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '');
 
     const contentPatterns = [
       // GitHub Actions injection (only for workflow files)
@@ -183,7 +188,9 @@ process.stdin.on('end', () => {
       if (!sizeState.has(sizeKey)) {
         sizeState.add(sizeKey);
         saveState(sessionId, sizeState);
-        process.stderr.write(`PRIVACY-SHIELD: Large write detected (${lineCount} lines to ${filePath}). Consider splitting into smaller edits.\n`);
+        printBox('warn', `${t('Escritura grande detectada', 'Large write detected')}: ${lineCount} ${t('líneas en', 'lines in')} ${filePath}`,
+          t('Cambios muy grandes son difíciles de revisar y pueden ocultar modificaciones no deseadas', 'Very large changes are hard to review and may hide unwanted modifications'),
+          t('Divide en edits más pequeños. Reintenta para continuar de todos modos', 'Split into smaller edits. Retry to continue anyway'));
         process.exit(2);
       }
     }
@@ -208,7 +215,11 @@ process.stdin.on('end', () => {
       // First time seeing these patterns for this file — block + warn
       saveState(sessionId, state);
       maybeCleanupOldStates();
-      process.stderr.write(`PRIVACY-SHIELD: ${newWarnings.join(' | ')}\n`);
+      printBox('warn', newWarnings[0],
+        newWarnings.length > 1
+          ? `+${newWarnings.length - 1} ${t('patrón(es) adicional(es) detectados', 'additional pattern(s) detected')}`
+          : t('Patrón de seguridad detectado en el contenido', 'Security pattern detected in content'),
+        t('Revisa el código. Reintenta la misma operación para continuar (warn-once)', 'Review the code. Retry the same operation to continue (warn-once)'));
       process.exit(2);
     }
 

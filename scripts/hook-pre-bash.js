@@ -11,6 +11,7 @@
 const { readFileSync } = require('fs');
 const { join, basename } = require('path');
 const { homedir } = require('os');
+const { printBox, t } = require('./format-message.js');
 
 const CONFIG_PATH = join(homedir(), '.privacy-shield', 'config.json');
 
@@ -77,7 +78,10 @@ function checkAllowlist(command, config) {
   baseName = baseName.replace(/\.(exe|cmd|bat|ps1)$/i, '');
   if (allowed.has(baseName)) return null; // Allowed
 
-  return `Comando "${baseName}" no esta en la allowlist (preset: ${preset}). Configura en ${CONFIG_PATH}`;
+  return t(
+    `Comando "${baseName}" no esta en la allowlist (preset: ${preset}). Configura en ${CONFIG_PATH}`,
+    `Command "${baseName}" is not in the allowlist (preset: ${preset}). Configure in ${CONFIG_PATH}`
+  );
 }
 
 // ─── Supply chain warnings ───
@@ -99,12 +103,12 @@ function checkSupplyChain(command) {
 
   // Check for URL-based installs (higher risk)
   if (/\s(https?:\/\/|git\+|github:)\S+/.test(command)) {
-    warnings.push('Instalando desde URL/GitHub directamente — no pasa por registry');
+    warnings.push(t('Instalando desde URL/GitHub directamente — no pasa por registry', 'Installing directly from URL/GitHub — bypasses registry'));
   }
 
   // Check for global installs
   if (/\s(-g|--global)\s/.test(command)) {
-    warnings.push('Instalacion global detectada');
+    warnings.push(t('Instalacion global detectada', 'Global install detected'));
   }
 
   // Check for typosquatting candidates
@@ -115,7 +119,7 @@ function checkSupplyChain(command) {
     const pkgName = packageMatch[1].split('@')[0].toLowerCase();
     for (const pop of popular) {
       if (pkgName !== pop && levenshtein(pkgName, pop) === 1) {
-        warnings.push(`"${pkgName}" se parece a "${pop}" (typosquatting?)`);
+        warnings.push(t(`"${pkgName}" se parece a "${pop}" (typosquatting?)`, `"${pkgName}" looks like "${pop}" (typosquatting?)`));
       }
     }
   }
@@ -180,52 +184,56 @@ process.stdin.on('end', () => {
   // 1. Hard blocks (always enforced, regardless of allowlist)
   const rules = [
     // ── Critical: Destructive ──
-    [/rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--recursive)\s+[/~]/, 'Bloqueado rm -rf en directorio sistema/home'],
-    [/rm\s+-rf?\s+\/(?!\w)/, 'Bloqueado rm -rf /'],
-    [/:\s*\(\)\s*\{.*\|.*&\s*\}/, 'Bloqueado fork bomb'],
-    [/\bmkfs\b/, 'Bloqueado formateo de disco'],
-    [/\bdd\s+if=.*of=\/dev\//, 'Bloqueado escritura directa a dispositivo'],
+    [/rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--recursive)\s+[/~]/, t('Bloqueado rm -rf en directorio sistema/home', 'Blocked rm -rf on system/home directory')],
+    [/rm\s+-rf?\s+\/(?!\w)/, t('Bloqueado rm -rf /', 'Blocked rm -rf /')],
+    [/:\s*\(\)\s*\{.*\|.*&\s*\}/, t('Bloqueado fork bomb', 'Blocked fork bomb')],
+    [/\bmkfs\b/, t('Bloqueado formateo de disco', 'Blocked disk format')],
+    [/\bdd\s+if=.*of=\/dev\//, t('Bloqueado escritura directa a dispositivo', 'Blocked direct device write')],
 
     // ── Critical: Remote execution ──
-    [/curl\s+.*\|\s*(bash|sh|zsh|python)/, 'Bloqueado pipe de descarga a shell'],
-    [/wget\s+.*\|\s*(bash|sh|zsh|python)/, 'Bloqueado pipe de descarga a shell'],
+    [/curl\s+.*\|\s*(bash|sh|zsh|python)/, t('Bloqueado pipe de descarga a shell', 'Blocked download-to-shell pipe')],
+    [/wget\s+.*\|\s*(bash|sh|zsh|python)/, t('Bloqueado pipe de descarga a shell', 'Blocked download-to-shell pipe')],
 
     // ── Critical: Reverse shells ──
-    [/bash\s+-i\s+>&?\s*\/dev\/tcp/, 'Bloqueado reverse shell'],
-    [/nc\s+(-e|-c|--exec)\s/, 'Bloqueado netcat con ejecucion'],
+    [/bash\s+-i\s+>&?\s*\/dev\/tcp/, t('Bloqueado reverse shell', 'Blocked reverse shell')],
+    [/nc\s+(-e|-c|--exec)\s/, t('Bloqueado netcat con ejecucion', 'Blocked netcat with execution')],
 
     // ── Critical: Exfiltration ──
-    [/cat\s+.*\.(env|pem|key|ssh).*\|\s*curl/, 'Bloqueado exfiltracion de archivos sensibles'],
-    [/base64\s+.*\|\s*(curl|wget|nc)/, 'Bloqueado encoding+exfiltracion'],
-    [/tar\s+.*\|\s*(curl|wget|nc)/, 'Bloqueado empaquetado+exfiltracion'],
-    [/echo\s+.*\|\s*base64\s+-d\s*\|\s*(bash|sh)/, 'Bloqueado decodificacion base64 a shell'],
+    [/cat\s+.*\.(env|pem|key|ssh).*\|\s*curl/, t('Bloqueado exfiltracion de archivos sensibles', 'Blocked sensitive file exfiltration')],
+    [/base64\s+.*\|\s*(curl|wget|nc)/, t('Bloqueado encoding+exfiltracion', 'Blocked encoding+exfiltration')],
+    [/tar\s+.*\|\s*(curl|wget|nc)/, t('Bloqueado empaquetado+exfiltracion', 'Blocked archive+exfiltration')],
+    [/echo\s+.*\|\s*base64\s+-d\s*\|\s*(bash|sh)/, t('Bloqueado decodificacion base64 a shell', 'Blocked base64 decode to shell')],
 
     // ── High: Firewall disable ──
-    [/iptables\s+.*-F/, 'Bloqueado flush de firewall'],
-    [/\bufw\s+disable\b/, 'Bloqueado desactivacion de firewall'],
+    [/iptables\s+.*-F/, t('Bloqueado flush de firewall', 'Blocked firewall flush')],
+    [/\bufw\s+disable\b/, t('Bloqueado desactivacion de firewall', 'Blocked firewall disable')],
 
     // ── Windows: Destructive ──
-    [/del\s+\/[fFsS].*[/\\][*.]/, 'Bloqueado eliminacion recursiva (Windows del /F /S)'],
-    [/rd\s+\/[sS]\s+\/[qQ]\s+[A-Z]:\\/i, 'Bloqueado eliminacion de directorio raiz (Windows)'],
-    [/rmdir\s+\/[sS]\s+\/[qQ]\s+[A-Z]:\\/i, 'Bloqueado eliminacion de directorio raiz (Windows)'],
-    [/format\s+[A-Z]:\s*/i, 'Bloqueado formateo de disco (Windows)'],
+    [/del\s+\/[fFsS].*[/\\][*.]/, t('Bloqueado eliminacion recursiva (Windows del /F /S)', 'Blocked recursive delete (Windows del /F /S)')],
+    [/rd\s+\/[sS]\s+\/[qQ]\s+[A-Z]:\\/i, t('Bloqueado eliminacion de directorio raiz (Windows)', 'Blocked root directory deletion (Windows)')],
+    [/rmdir\s+\/[sS]\s+\/[qQ]\s+[A-Z]:\\/i, t('Bloqueado eliminacion de directorio raiz (Windows)', 'Blocked root directory deletion (Windows)')],
+    [/format\s+[A-Z]:\s*/i, t('Bloqueado formateo de disco (Windows)', 'Blocked disk format (Windows)')],
 
     // ── Windows: Remote execution ──
-    [/powershell\s+.*-[eE](?:nc(?:odedCommand)?)\s+/i, 'Bloqueado PowerShell con comando codificado'],
-    [/Invoke-WebRequest\s+.*\|\s*(?:Invoke-Expression|iex)/i, 'Bloqueado descarga+ejecucion PowerShell (IWR|IEX)'],
-    [/iwr\s+.*\|\s*iex/i, 'Bloqueado descarga+ejecucion PowerShell (alias)'],
-    [/DownloadString\s*\(\s*['"]https?:/i, 'Bloqueado descarga de script remoto via WebClient'],
+    [/powershell\s+.*-[eE](?:nc(?:odedCommand)?)\s+/i, t('Bloqueado PowerShell con comando codificado', 'Blocked PowerShell with encoded command')],
+    [/Invoke-WebRequest\s+.*\|\s*(?:Invoke-Expression|iex)/i, t('Bloqueado descarga+ejecucion PowerShell (IWR|IEX)', 'Blocked download+execute PowerShell (IWR|IEX)')],
+    [/iwr\s+.*\|\s*iex/i, t('Bloqueado descarga+ejecucion PowerShell (alias)', 'Blocked download+execute PowerShell (alias)')],
+    [/DownloadString\s*\(\s*['"]https?:/i, t('Bloqueado descarga de script remoto via WebClient', 'Blocked remote script download via WebClient')],
 
     // ── Windows: Reverse shell ──
-    [/New-Object\s+System\.Net\.Sockets\.TCPClient/i, 'Bloqueado reverse shell PowerShell'],
+    [/New-Object\s+System\.Net\.Sockets\.TCPClient/i, t('Bloqueado reverse shell PowerShell', 'Blocked PowerShell reverse shell')],
 
     // ── Windows: Security bypass ──
-    [/Set-MpPreference\s+.*-DisableRealtimeMonitoring\s+\$true/i, 'Bloqueado desactivacion de Windows Defender'],
+    [/Set-MpPreference\s+.*-DisableRealtimeMonitoring\s+\$true/i, t('Bloqueado desactivacion de Windows Defender', 'Blocked Windows Defender disable')],
   ];
 
   for (const [regex, message] of rules) {
     if (regex.test(command)) {
-      process.stderr.write(`PRIVACY-SHIELD: ${message}\n`);
+      printBox('block', message,
+        t('Patrón de seguridad crítico detectado en el comando',
+          'Critical security pattern detected in the command'),
+        t('Reformula el comando sin la parte peligrosa o usa alternativas seguras',
+          'Reformulate the command without the dangerous part or use safe alternatives'));
       process.exit(2);
     }
   }
@@ -233,23 +241,34 @@ process.stdin.on('end', () => {
   // 2. Argument validation
   const argIssue = checkArguments(command);
   if (argIssue) {
-    process.stderr.write(`PRIVACY-SHIELD: ${argIssue}\n`);
+    printBox('block', argIssue,
+      t('Argumento del comando contiene caracteres peligrosos',
+        'Command argument contains dangerous characters'),
+      t('Usa comillas adecuadas y evita null bytes o anidamiento excesivo',
+        'Use proper quoting and avoid null bytes or excessive nesting'));
     process.exit(2);
   }
 
   // 3. Allowlist check (if enabled)
   const allowlistIssue = checkAllowlist(command, config);
   if (allowlistIssue) {
-    process.stderr.write(`PRIVACY-SHIELD: ${allowlistIssue}\n`);
+    printBox('block', allowlistIssue,
+      t('Modo allowlist activo — solo comandos en la lista están permitidos',
+        'Allowlist mode active — only listed commands are permitted'),
+      t('Agrega el comando a allowlist_extra en ~/.privacy-shield/config.json',
+        'Add the command to allowlist_extra in ~/.privacy-shield/config.json'));
     process.exit(2);
   }
 
   // 4. Supply chain warnings (informational, not blocking)
   const supplyChainWarning = checkSupplyChain(command);
   if (supplyChainWarning) {
-    process.stderr.write(`PRIVACY-SHIELD [supply-chain]: ${supplyChainWarning}\n`);
+    printBox('warn', supplyChainWarning,
+      t('Posible riesgo en cadena de suministro',
+        'Possible supply chain risk'),
+      t('Verifica el paquete en npmjs.com antes de instalar',
+        'Check the package on npmjs.com before installing'));
     // Note: we do NOT exit(2) here — just warn.
-    // The install proceeds, but the user sees the warning.
   }
 
   process.exit(0);

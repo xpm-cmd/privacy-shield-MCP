@@ -93,7 +93,7 @@ const DETECTION_PATTERNS = [
     {
         name: "Teléfono (formato internacional)",
         type: "pii",
-        pattern: /(?:(?:tel|phone|fax|móvil|celular|teléfono|whatsapp)\s*[:=]?\s*)?(?:\+\d{1,3}[-.\s]?)\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}/gi,
+        pattern: /(?:(?:tel|phone|fax|móvil|celular|teléfono|whatsapp)\s*[:=]?\s*)?\+\d{1,3}[-.\s]\(?\d{2,4}\)?[-.\s]\d{3,4}[-.\s]?\d{3,4}\b/gi,
         risk: "medium",
         redact: (m) => m.slice(0, 4) + "****" + m.slice(-2),
     },
