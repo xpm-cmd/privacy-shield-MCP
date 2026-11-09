@@ -230,71 +230,75 @@ export class CollusionDetector {
    */
   detectCollusion(): {
     rings: string[][];
+    /** True when the ring search hit its ring or step limit; more rings may exist. */
+    ringsTruncated: boolean;
     unusualFrequency: Array<{ pair: string[]; count: number }>;
     coordinatedTiming: Array<{ agents: string[]; window: number }>;
   } {
+    const { rings, truncated } = this.detectRings();
     return {
-      rings: this.detectRings(),
+      rings,
+      ringsTruncated: truncated,
       unusualFrequency: this.detectUnusualFrequency(),
       coordinatedTiming: this.detectCoordinatedTiming(),
     };
   }
 
-  // --- Ring detection via DFS cycle finding ---
+  // --- Ring detection via bounded DFS cycle finding ---
 
-  private detectRings(): string[][] {
-    // Build adjacency list
-    const adj = new Map<string, Set<string>>();
+  /** Longest ring reported (number of agents). */
+  private static readonly MAX_RING_LENGTH = 10;
+  /** Rings reported at most; a dense graph has exponentially many. */
+  private static readonly MAX_RINGS = 100;
+  /** Edge visits allowed per detection, so search time stays bounded on any graph. */
+  private static readonly MAX_SEARCH_STEPS = 50_000;
+
+  private detectRings(): { rings: string[][]; truncated: boolean } {
+    // Build adjacency list (sorted for deterministic output)
+    const adjSets = new Map<string, Set<string>>();
     for (const { from, to } of this.interactions) {
-      if (!adj.has(from)) adj.set(from, new Set());
-      adj.get(from)!.add(to);
+      if (!adjSets.has(from)) adjSets.set(from, new Set());
+      adjSets.get(from)!.add(to);
     }
+    const adj = new Map<string, string[]>();
+    for (const [node, next] of adjSets) adj.set(node, [...next].sort());
 
     const rings: string[][] = [];
-    const visited = new Set<string>();
-    const ringSet = new Set<string>(); // dedup serialised rings
+    let steps = 0;
+    let truncated = false;
 
-    const dfs = (node: string, path: string[]): void => {
-      if (path.length > 10) return; // max depth
+    // Each simple cycle is reported once, rotated to start at its smallest agent: the search
+    // from `start` only walks through agents that sort after `start`, so no ring is found
+    // twice and no dedup set is needed.
+    for (const start of [...adj.keys()].sort()) {
+      const path = [start];
+      const onPath = new Set(path);
 
-      const neighbours = adj.get(node);
-      if (!neighbours) return;
-
-      for (const next of neighbours) {
-        const cycleStart = path.indexOf(next);
-        if (cycleStart !== -1) {
-          const cycle = path.slice(cycleStart);
-          if (cycle.length >= 3) {
-            // Normalise: rotate so smallest element comes first
-            const minIdx = cycle.indexOf(
-              cycle.reduce((a, b) => (a < b ? a : b)),
-            );
-            const normalised = [
-              ...cycle.slice(minIdx),
-              ...cycle.slice(0, minIdx),
-            ];
-            const key = normalised.join('->');
-            if (!ringSet.has(key)) {
-              ringSet.add(key);
-              rings.push(normalised);
+      const dfs = (node: string): void => {
+        for (const next of adj.get(node) ?? []) {
+          if (++steps > CollusionDetector.MAX_SEARCH_STEPS) { truncated = true; return; }
+          if (next === start) {
+            if (path.length >= 3) {
+              rings.push([...path]);
+              if (rings.length >= CollusionDetector.MAX_RINGS) { truncated = true; return; }
             }
+            continue;
           }
-          continue;
+          if (next < start || onPath.has(next) || path.length >= CollusionDetector.MAX_RING_LENGTH) continue;
+          path.push(next);
+          onPath.add(next);
+          dfs(next);
+          onPath.delete(next);
+          path.pop();
+          if (truncated) return;
         }
+      };
 
-        if (!visited.has(next)) {
-          dfs(next, [...path, next]);
-        }
-      }
-    };
-
-    for (const node of adj.keys()) {
-      visited.clear();
-      dfs(node, [node]);
-      visited.add(node);
+      dfs(start);
+      if (truncated) break;
     }
 
-    return rings;
+    return { rings, truncated };
   }
 
   // --- Unusual frequency detection ---
@@ -380,20 +384,30 @@ interface MemoryProposal {
   timestamp: number;
   votes: Map<string, boolean>;
   resolved: boolean;
-  result?: {
-    approved: boolean;
-    votes: { for: number; against: number; total: number };
-    threshold: number;
-  };
+  result?: QuorumResult;
+}
+
+interface QuorumResult {
+  approved: boolean;
+  votes: { for: number; against: number; total: number };
+  threshold: number;
+  minVoters: number;
 }
 
 export class MemoryQuorum {
   private proposals: Map<string, MemoryProposal> = new Map();
   private threshold: number;
+  private minVoters: number;
   private maxProposals = 1000;
 
-  constructor(threshold: number = 0.67) {
+  /**
+   * @param threshold  Share of "for" votes needed (default 2/3).
+   * @param minVoters  Votes needed before a proposal can pass, the proposer's included
+   *                   (default 3). Without it a proposer approves its own write 1/1.
+   */
+  constructor(threshold: number = 0.67, minVoters: number = 3) {
     this.threshold = threshold;
+    this.minVoters = Math.max(1, Math.floor(minVoters));
   }
 
   /**
@@ -459,11 +473,7 @@ export class MemoryQuorum {
    *
    * @throws If the proposal does not exist.
    */
-  resolve(proposalId: string): {
-    approved: boolean;
-    votes: { for: number; against: number; total: number };
-    threshold: number;
-  } {
+  resolve(proposalId: string): QuorumResult {
     const proposal = this.proposals.get(proposalId);
 
     if (!proposal) {
@@ -482,12 +492,13 @@ export class MemoryQuorum {
     }
 
     const total = forCount + againstCount;
-    const approved = total > 0 && forCount / total >= this.threshold;
+    const approved = total >= this.minVoters && forCount / total >= this.threshold;
 
-    const result = {
+    const result: QuorumResult = {
       approved,
       votes: { for: forCount, against: againstCount, total },
       threshold: this.threshold,
+      minVoters: this.minVoters,
     };
 
     proposal.resolved = true;

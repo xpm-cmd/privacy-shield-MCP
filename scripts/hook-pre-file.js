@@ -1,19 +1,25 @@
 #!/usr/bin/env node
-// Privacy Shield v2 - PreToolUse hook for file operations (Edit, Write, MultiEdit)
-// Exit 0 = allow, Exit 2 = block
-// Layer 1 (sensitive paths): ALWAYS blocks the operation
-// Layer 2 (code patterns):   Blocks FIRST time per file+rule, allows subsequent attempts
-//                             (security-guidance "warn once" pattern)
+// Privacy Shield v2 - PreToolUse hook for file operations (Edit, Write, MultiEdit, NotebookEdit)
+// Exit 2 = block (stderr goes to Claude). Exit 0 = allow, or ask the user when stdout
+// carries a PreToolUse permissionDecision of "ask".
+// Layer 1 (sensitive paths): credential files and the shield's own controls are blocked;
+//                            Claude/shell/git config files need the user's approval
+// Layer 2 (code patterns):   Blocks the FIRST time per file+rule so Claude can reconsider;
+//                            a retry goes to the user instead of passing silently
 // Layer 3 (diff size):       Warns on large writes (>300 lines) — first time only
 
 const { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, statSync } = require('fs');
-const { join } = require('path');
+const { join, resolve } = require('path');
 const { homedir } = require('os');
 const { printBox, t } = require('./format-message.js');
+const { isEnvFileName, normalizeForMatch, classifyControlPath, disablesShield } = require('./sensitive-paths.js');
 
-const STATE_DIR = join(homedir(), '.privacy-shield');
+const HOME = homedir();
+const STATE_DIR = join(HOME, '.privacy-shield');
+const PLUGIN_ROOT = resolve(__dirname, '..');
 const CLEANUP_MAX_AGE_DAYS = 30;
 const CLEANUP_PROBABILITY = 0.1; // 10% chance per run
+const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 // ─── State file helpers (Set-based, like security-guidance) ───
 
@@ -51,6 +57,56 @@ function maybeCleanupOldStates() {
   } catch { /* best effort */ }
 }
 
+// ─── Decisions ───
+
+function block(title, reason, action) {
+  printBox('block', title, reason, action);
+  process.exit(2);
+}
+
+// The reason is shown to the user in the permission prompt; additionalContext tells Claude.
+function ask(reasons) {
+  const reason = `Privacy Shield: ${reasons.join(' | ')}`;
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'ask',
+      permissionDecisionReason: reason,
+      additionalContext: reason,
+    },
+  }));
+  process.exit(0);
+}
+
+// Credential files: always blocked. Tested against normalizeForMatch() output.
+const CREDENTIAL_PATHS = [
+  [/\/id_(rsa|ed25519|ecdsa|dsa)$/, 'SSH key'],
+  [/\/\.ssh\/(config|authorized_keys|known_hosts)$/, 'SSH config'],
+  [/\.(pem|pfx|p12)$/, 'certificate/private key'],
+  [/\/\.aws\/credentials$/, 'AWS credentials'],
+  [/\/\.docker\/config\.json$/, 'Docker config'],
+  [/\/\.kube\/config$/, 'Kube config'],
+  [/\/\.netrc$/, '.netrc'],
+  [/\/\.npmrc$/, '.npmrc'],
+  [/\/\.pypirc$/, '.pypirc'],
+  [/\/wallet\.dat$/, 'crypto wallet'],
+  [/\/\.gnupg\/.*\.(key|gpg)$/, 'GPG key'],
+  [/\/\.password-store\//, 'password store'],
+  [/\/\.config\/gh\/hosts\.yml$/, 'GitHub CLI tokens'],
+];
+
+// A hardcoded value only counts when the value itself is not a placeholder.
+const PLACEHOLDER_VALUE = /example|test|placeholder|changeme|xxx|dummy|your[_-]|<[^>]*>|\$\{/i;
+
+function hasHardcodedSecret(content) {
+  const re = /(password|secret|api_key|apikey|token)\s*=\s*["']([^"']{8,})["']/gi;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    if (!PLACEHOLDER_VALUE.test(m[2])) return true;
+  }
+  return false;
+}
+
 // ─── Main ───
 
 let data = '';
@@ -60,51 +116,14 @@ process.stdin.on('end', () => {
     const input = JSON.parse(data);
     const toolName = input.tool_name || '';
     const toolInput = input.tool_input || {};
-    const filePath = toolInput.file_path || '';
+    const filePath = toolInput.file_path || toolInput.notebook_path || '';
     const sessionId = input.session_id || 'default';
 
     if (!filePath) process.exit(0);
 
     // Read always allowed
-    if (toolName !== 'Write' && toolName !== 'Edit' && toolName !== 'MultiEdit') process.exit(0);
+    if (!FILE_TOOLS.has(toolName)) process.exit(0);
 
-    // ═══════════════════════════════════════════════
-    // LAYER 1: Sensitive file path checks (ALWAYS BLOCK)
-    // ═══════════════════════════════════════════════
-    const norm = filePath.replace(/\\/g, '/').toLowerCase();
-    // Strip Windows drive letter for consistent matching (C:/path -> /path)
-    const normForCheck = norm.replace(/^[a-z]:/, '');
-
-    const pathBlocks = [
-      [/(\/\.env|\/\.env\.\w+)$/, '.env file'],
-      [/\/id_(rsa|ed25519|ecdsa|dsa)$/, 'SSH key'],
-      [/\/\.ssh\/(config|authorized_keys|known_hosts)$/, 'SSH config'],
-      [/\.(pem|pfx|p12)$/, 'certificate/private key'],
-      [/\/\.aws\/credentials$/, 'AWS credentials'],
-      [/\/\.docker\/config\.json$/, 'Docker config'],
-      [/\/\.kube\/config$/, 'Kube config'],
-      [/\/\.netrc$/, '.netrc'],
-      [/\/\.npmrc$/, '.npmrc'],
-      [/\/\.pypirc$/, '.pypirc'],
-      [/\/wallet\.dat$/, 'crypto wallet'],
-      [/\/\.gnupg\/.*\.(key|gpg)$/, 'GPG key'],
-      [/\/\.password-store\//, 'password store'],
-      [/\/\.config\/gh\/hosts\.yml$/, 'GitHub CLI tokens'],
-    ];
-
-    for (const [regex, desc] of pathBlocks) {
-      if (regex.test(normForCheck)) {
-        printBox('block', `${t('Escritura bloqueada', 'Write blocked')}: ${desc}`,
-          t(`El archivo ${filePath} contiene credenciales o claves sensibles`, `File ${filePath} contains sensitive credentials or keys`),
-          t('Mueve el archivo fuera de rutas protegidas o usa variables de entorno', 'Move the file out of protected paths or use environment variables'));
-        process.exit(2);
-      }
-    }
-
-    // ═══════════════════════════════════════════════
-    // LAYER 2: Dangerous code patterns in content
-    // Block FIRST time per file+rule, allow on retry
-    // ═══════════════════════════════════════════════
     let content = '';
     if (toolName === 'Write') {
       content = toolInput.content || '';
@@ -113,9 +132,45 @@ process.stdin.on('end', () => {
     } else if (toolName === 'MultiEdit') {
       const edits = toolInput.edits || [];
       content = edits.map(e => e.new_string || '').join(' ');
+    } else if (toolName === 'NotebookEdit') {
+      content = toolInput.new_source || '';
     }
 
-    if (!content) process.exit(0);
+    // ═══════════════════════════════════════════════
+    // LAYER 1: Sensitive file paths
+    // ═══════════════════════════════════════════════
+    const normForCheck = normalizeForMatch(filePath);
+    const askReasons = [];
+
+    const base = normForCheck.split('/').pop();
+    const credential = isEnvFileName(base)
+      ? '.env file'
+      : (CREDENTIAL_PATHS.find(([re]) => re.test(normForCheck)) || [])[1];
+    if (credential) {
+      block(`${t('Escritura bloqueada', 'Write blocked')}: ${credential}`,
+        t(`El archivo ${filePath} contiene credenciales o claves sensibles`, `File ${filePath} contains sensitive credentials or keys`),
+        t('Mueve el archivo fuera de rutas protegidas o usa variables de entorno', 'Move the file out of protected paths or use environment variables'));
+    }
+
+    const control = classifyControlPath(filePath, HOME, PLUGIN_ROOT);
+    if (control) {
+      if (control.level === 'block' || (control.settings && disablesShield(content))) {
+        block(`${t('Escritura bloqueada', 'Write blocked')}: ${control.desc}`,
+          t(`${filePath} controla las protecciones de Privacy Shield`, `${filePath} controls Privacy Shield's protections`),
+          t('Si el cambio es intencional, hazlo tú manualmente', 'If the change is intended, make it yourself outside Claude'));
+      }
+      askReasons.push(t(`escritura en ${control.desc}: ${filePath}`, `write to ${control.desc}: ${filePath}`));
+    }
+
+    if (!content) {
+      if (askReasons.length) ask(askReasons);
+      process.exit(0);
+    }
+
+    // ═══════════════════════════════════════════════
+    // LAYER 2: Dangerous code patterns in content
+    // Block FIRST time per file+rule, ask the user on retry
+    // ═══════════════════════════════════════════════
 
     // Normalize path for warningKey (keep full path, just fix slashes)
     const normPath = filePath.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '');
@@ -171,9 +226,9 @@ process.stdin.on('end', () => {
         test: () => /f["'].*SELECT\b.*\{/.test(content) || /f["'].*INSERT\b.*\{/.test(content) || /f["'].*UPDATE\b.*\{/.test(content) || /f["'].*DELETE\b.*\{/.test(content),
         msg: 'SQL injection risk: f-string with SQL query detected. Use parameterized queries (?) or an ORM.' },
 
-      // Hardcoded secrets
+      // Hardcoded secrets (judged per value, so "test" elsewhere in the file doesn't hide one)
       { id: 'hardcoded-secret',
-        test: () => /(password|secret|api_key|apikey|token)\s*=\s*["'][^"']{8,}["']/i.test(content) && !/example|test|placeholder|changeme|xxx|dummy/i.test(content),
+        test: () => hasHardcodedSecret(content),
         msg: 'Possible hardcoded secret detected. Use environment variables or a secret manager.' },
     ];
 
@@ -197,7 +252,10 @@ process.stdin.on('end', () => {
 
     // Find all matching patterns
     const matched = contentPatterns.filter(p => p.test());
-    if (matched.length === 0) process.exit(0);
+    if (matched.length === 0) {
+      if (askReasons.length) ask(askReasons);
+      process.exit(0);
+    }
 
     // Load state and check for new (unseen) warnings
     const state = loadState(sessionId);
@@ -212,20 +270,20 @@ process.stdin.on('end', () => {
     }
 
     if (newWarnings.length > 0) {
-      // First time seeing these patterns for this file — block + warn
+      // First time seeing these patterns for this file — block so Claude can reconsider
       saveState(sessionId, state);
       maybeCleanupOldStates();
       printBox('warn', newWarnings[0],
         newWarnings.length > 1
           ? `+${newWarnings.length - 1} ${t('patrón(es) adicional(es) detectados', 'additional pattern(s) detected')}`
           : t('Patrón de seguridad detectado en el contenido', 'Security pattern detected in content'),
-        t('Revisa el código. Reintenta la misma operación para continuar (warn-once)', 'Review the code. Retry the same operation to continue (warn-once)'));
+        t('Revisa el código. Si es necesario, reintenta y el usuario decidirá', 'Review the code. If it is needed, retry and the user will decide'));
       process.exit(2);
     }
 
-    // All matched patterns were already seen — allow silently
+    // Claude already saw these warnings and retried: the user decides, not the retry.
     maybeCleanupOldStates();
-    process.exit(0);
+    ask([...askReasons, ...matched.map(p => p.msg)]);
 
   } catch {
     process.exit(0); // Allow on error

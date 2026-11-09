@@ -32,20 +32,43 @@ let loaded = false;
 // ============================================================
 // Persistence
 // ============================================================
+/**
+ * Build valid stats from whatever stats.json holds: every field is checked and a missing
+ * or malformed one falls back to its default, so an old or hand-edited file can't make
+ * recordScan() throw.
+ */
+function sanitizeStats(parsed) {
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        return null;
+    const p = parsed;
+    const count = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+    const detectionsByCategory = {};
+    const cats = p.detectionsByCategory;
+    if (cats && typeof cats === 'object' && !Array.isArray(cats)) {
+        for (const [k, v] of Object.entries(cats)) {
+            if (typeof v === 'number' && Number.isFinite(v) && v >= 0)
+                detectionsByCategory[k] = v;
+        }
+    }
+    return {
+        totalScans: count(p.totalScans),
+        totalDetections: count(p.totalDetections),
+        avgLatencyMs: count(p.avgLatencyMs),
+        detectionsByCategory,
+        lastUpdated: typeof p.lastUpdated === 'string' ? p.lastUpdated : new Date().toISOString(),
+    };
+}
 function loadStats() {
     if (loaded)
         return;
     loaded = true;
     try {
-        const raw = readFileSync(STATS_FILE, 'utf8');
-        const parsed = JSON.parse(raw);
-        // Validate shape
-        if (typeof parsed.totalScans === 'number' && typeof parsed.totalDetections === 'number') {
-            stats = parsed;
-        }
+        const sanitized = sanitizeStats(JSON.parse(readFileSync(STATS_FILE, 'utf8')));
+        if (sanitized)
+            stats = sanitized;
     }
     catch {
-        // No stats file yet — use defaults
+        // No stats file yet (or unreadable JSON) — use defaults
     }
 }
 function saveStats() {

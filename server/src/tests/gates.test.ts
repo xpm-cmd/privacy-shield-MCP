@@ -183,3 +183,44 @@ describe('runAllGates', () => {
     expect(result!.gate).toBe('diff-size');
   });
 });
+
+// ============================================================
+// Secret formats the gate used to miss (shared with privacy.ts)
+// ============================================================
+
+describe('secretDetectionGate — modern key formats', () => {
+  // Fixtures are built from parts so the repo's own secret scanners don't flag this file.
+  const body = 'Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4z' + 'Ab3dEf6hIj9kLm2nOp5qRs8t';
+  it.each([
+    ['Anthropic', 'sk-' + 'ant-' + 'api03-' + body],
+    ['OpenAI project', 'sk-' + 'proj-' + body],
+    ['GitHub fine-grained PAT', 'github' + '_pat_' + '11ABCDEFG0' + body],
+    ['OpenSSH private key', '-----BEGIN OPENSSH ' + 'PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjE=\n-----END OPENSSH PRIVATE KEY-----'],
+  ])('detects %s', (_name, secret) => {
+    const result = secretDetectionGate(`const value = "${secret}";`);
+    expect(result).not.toBeNull();
+    expect(result!.decision).toBe('block');
+  });
+});
+
+describe('runAllGates — tool allowlist', () => {
+  it('blocks a tool that is not in allowedTools', () => {
+    const result = runAllGates('hello', { allowedTools: ['Read', 'mcp__privacy-shield__*'], toolName: 'Bash' });
+    expect(result).not.toBeNull();
+    expect(result!.gate).toBe('tool-allowlist');
+    expect(result!.decision).toBe('block');
+  });
+
+  it('passes a tool that matches a wildcard entry', () => {
+    const result = runAllGates('hello', { allowedTools: ['mcp__privacy-shield__*'], toolName: 'mcp__privacy-shield__scan_code' });
+    expect(result).toBeNull();
+  });
+
+  it('applies custom secret patterns from the config', () => {
+    const result = runAllGates('internal id ACME-0000-SECRET-1234', {
+      customSecretPatterns: [{ pattern: /ACME-\d{4}-SECRET-\d{4}/g, name: 'ACME internal token' }],
+    });
+    expect(result).not.toBeNull();
+    expect(result!.gate).toBe('secrets');
+  });
+});

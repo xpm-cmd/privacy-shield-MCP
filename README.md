@@ -93,28 +93,33 @@ Blocks dangerous shell commands before execution. Covers both Unix and Windows t
 | Exfiltration | `cat .env \| curl`, `base64 \| curl` | `certutil -urlcache`, `bitsadmin /transfer` |
 | Security bypass | `iptables -F`, `ufw disable` | `Set-MpPreference -DisableRealtimeMonitoring` |
 
+The same hook covers the `Bash` and `PowerShell` tools. Commands are parsed into pipelines rather than matched as raw text, so flag order (`rm -fr`, `rm -r -f`), case (`RM`, `CURL`), wrappers (`sudo`, `env`, `xargs`, `/bin/sh`), substitutions (`bash <(curl …)`, `iex (irm …)`) and nested shells (`bash -c`, `pwsh -Command`) don't change the verdict. PowerShell-specific checks: `Remove-Item -Recurse` on root/home, `iex`/`irm` download-and-run, `-enc`/`-e` encoded commands, and `Get-Content .env | Invoke-RestMethod`.
+
 Additional features:
-- **Configurable allowlist mode** via `~/.privacy-shield/config.json` with factory presets (`development`, `read-only`)
-- **Supply chain warnings** (informational, not blocking) for install commands (`npm install`, `pip install`, `git clone`)
+- **Configurable allowlist mode** via `~/.privacy-shield/config.json` with factory presets (`development`, `read-only`). Every command in the line is checked (after `&&`, `;`, `|` and inside `$( )`), wrappers such as `env` and `sudo` must be allowed too, and two-word entries (`git log`) allow one subcommand
+- **Control files**: shell writes (`>`, `tee`, `cp`, `Set-Content` …) to the shield's own files are blocked; writes to Claude settings, shell profiles and git hooks ask the user
+- **Supply chain warnings** for install commands (`npm install`, `pip install`, `git clone`) are shown to the user in the permission prompt
 - **Typosquatting detection** for popular packages
-- **Argument validation**: null bytes, excessive backtick nesting
+- **Argument validation**: null bytes
 
 ### File Operation Validation
 
-Two layers of protection for file operations (Write/Edit/MultiEdit). Read operations are always allowed.
+Layered protection for file operations (Write/Edit/MultiEdit/NotebookEdit). Read operations are always allowed.
 
-**Layer 1: Path-based blocks** always block writes to sensitive files:
+**Layer 1: Path-based blocks** always block writes to sensitive files. Paths are matched after normalization, so relative paths, NTFS streams (`.env::$DATA`) and trailing dots don't slip through:
 
 | Category | Files |
 |---|---|
-| Environment | `.env`, `.env.local`, `.env.production` |
+| Environment | `.env`, `.env.local`, `.env.production.local` (templates such as `.env.example` are allowed) |
 | SSH | `id_rsa`, `id_ed25519`, `authorized_keys`, `.ssh/config` |
 | Certificates | `.pem`, `.pfx`, `.p12` |
 | Cloud credentials | `.aws/credentials`, `.docker/config.json`, `.kube/config` |
 | Auth configs | `.netrc`, `.npmrc`, `.pypirc` |
 | Secrets | `wallet.dat`, `.gnupg/*.key`, `.password-store/`, `.config/gh/hosts.yml` |
 
-**Layer 2: Content pattern detection** uses a "block once, then allow" approach. The first time a dangerous pattern is detected, the operation is blocked with a warning. On retry, it's allowed.
+The shield also protects its own controls. Writes to the plugin's `hooks/`, `scripts/` and `.claude-plugin/`, to `~/.privacy-shield/`, and to Claude settings that set `disableAllHooks` or turn the plugin off are blocked. Writes to `.claude/settings*.json`, shell startup files (`.bashrc`, `.zshrc` …), the PowerShell profile, `.git/hooks/*` and `.git/config` need the user's approval.
+
+**Layer 2: Content pattern detection** blocks the first time a dangerous pattern is detected in a file, so Claude can reconsider. A retry goes to the user as a permission prompt instead of passing silently. Hardcoded secrets are judged per value, so a placeholder such as `"test_value"` is ignored while a real value elsewhere in the same file is still caught.
 
 **Layer 3: Diff size gate** warns on writes exceeding 300 lines (configurable).
 
@@ -128,10 +133,6 @@ Blocks outbound requests to dangerous destinations:
 | URL shorteners | `bit.ly`, `tinyurl.com`, `t.co`, `goo.gl`, `is.gd` (17 total) |
 | Dangerous protocols | `javascript:`, `vbscript:`, `data:text/html:` |
 | High-risk TLDs | `.tk`, `.ml`, `.ga`, `.cf`, `.gq`, `.buzz`, `.zip`, `.mov` |
-
-### Permission Context Injection
-
-When Claude requests permission for a tool, the hook injects a prompt requiring Claude to explain what the action does, why it is necessary, what it affects, and whether it is reversible.
 
 ## MCP Tools (21 On-Demand Tools)
 
@@ -210,7 +211,9 @@ privacy-shield/
 │   ├── hook-pre-bash.js        # Bash/PowerShell command validator
 │   ├── hook-pre-file.js        # File path + content + diff size validator
 │   ├── hook-pre-web.js         # URL validator
-│   ├── hook-permission.js      # Permission context injector
+│   ├── shell-parse.js          # Quote-aware Bash/PowerShell command parser
+│   ├── sensitive-paths.js      # Credential and control-file rules shared by hooks
+│   ├── test-hook*.js           # Hook tests (npm run test:hooks)
 │   └── parse-input.js          # Shared JSON field extractor
 └── server/
     ├── package.json            # Node.js module config

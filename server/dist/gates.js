@@ -4,18 +4,20 @@
  * Modular gate system with aggregation. Each gate evaluates a specific
  * aspect of content/tool usage and returns a GateDecision or null (no issue).
  */
+import { analyzePrivacy } from './privacy.js';
 // ---------------------------------------------------------------------------
-// Built-in secret patterns (8)
+// Secret patterns
 // ---------------------------------------------------------------------------
+// Key formats (Anthropic, OpenAI sk-proj-, GitHub ghp_/github_pat_, AWS, Slack, Stripe,
+// private key blocks …) come from privacy.ts so both layers stay in step. The patterns
+// below only cover what privacy.ts does not: quoted assignments, npm tokens and a private
+// key header whose body was cut off.
 const SECRET_PATTERNS = [
     { pattern: /(?:api[_-]?key|apikey)\s*[:=]\s*['"][^'"]{8,}['"]/gi, name: 'API Key' },
     { pattern: /(?:secret|password|passwd|pwd)\s*[:=]\s*['"][^'"]{4,}['"]/gi, name: 'Secret/Password' },
     { pattern: /(?:token|bearer)\s*[:=]\s*['"][^'"]{10,}['"]/gi, name: 'Token/Bearer' },
-    { pattern: /-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----/g, name: 'PEM Private Key' },
-    { pattern: /sk-[a-zA-Z0-9]{20,}/g, name: 'OpenAI/Anthropic Key' },
-    { pattern: /ghp_[a-zA-Z0-9]{36}/g, name: 'GitHub PAT' },
     { pattern: /npm_[a-zA-Z0-9]{36}/g, name: 'npm Token' },
-    { pattern: /AKIA[0-9A-Z]{16}/g, name: 'AWS Access Key' },
+    { pattern: /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----(?![\s\S]*?-----END)/g, name: 'Private key header' },
 ];
 // ---------------------------------------------------------------------------
 // Decision severity helpers
@@ -102,18 +104,35 @@ function redact(value) {
     return '*'.repeat(value.length);
 }
 /**
- * Scans content for hard-coded secrets using built-in patterns.
+ * Scans content for hard-coded secrets: every secret rule of privacy.ts, the gate's own
+ * patterns and any custom patterns.
  *
  * @param content - The text content to scan.
+ * @param customPatterns - Extra patterns, e.g. internal token formats.
  * @returns A blocking GateDecision or null if no secrets detected.
  */
-export function secretDetectionGate(content) {
+export function secretDetectionGate(content, customPatterns = []) {
     const redactedMatches = [];
-    for (const { pattern, name } of SECRET_PATTERNS) {
-        // Reset stateful regex before use
-        pattern.lastIndex = 0;
+    const privacy = analyzePrivacy(content);
+    for (const finding of privacy.findings) {
+        if (finding.type === 'secret') {
+            redactedMatches.push(`${finding.description}: ${finding.redacted}`);
+        }
+    }
+    // Scan what privacy.ts left unredacted, so one secret is not counted twice.
+    const rest = privacy.redacted_text;
+    for (const { pattern, name } of [...SECRET_PATTERNS, ...customPatterns]) {
+        // A non-global regex would make exec() return the same match forever.
+        const re = pattern.global ? pattern : new RegExp(pattern.source, pattern.flags + 'g');
+        re.lastIndex = 0;
         let match;
-        while ((match = pattern.exec(content)) !== null) {
+        while ((match = re.exec(rest)) !== null) {
+            if (match[0].length === 0) {
+                re.lastIndex++;
+                continue;
+            }
+            if (match[0].includes('****'))
+                continue; // already redacted by privacy.ts
             redactedMatches.push(`${name}: ${redact(match[0])}`);
         }
     }
@@ -153,9 +172,9 @@ export function aggregateGates(results) {
 // Run all gates
 // ---------------------------------------------------------------------------
 /**
- * Convenience function that runs diffSizeGate and secretDetectionGate on the
- * provided content, aggregates the results, and returns the most restrictive
- * decision (or null if everything passes).
+ * Runs diffSizeGate, secretDetectionGate and, when `allowedTools` and `toolName` are
+ * given, toolAllowlistGate; returns the most restrictive decision (or null if
+ * everything passes).
  *
  * @param content - Text content to evaluate.
  * @param config  - Optional gate configuration overrides.
@@ -163,8 +182,11 @@ export function aggregateGates(results) {
 export function runAllGates(content, config) {
     const results = [
         diffSizeGate(content, config?.diffSizeThreshold),
-        secretDetectionGate(content),
+        secretDetectionGate(content, config?.customSecretPatterns),
     ];
+    if (config?.allowedTools && config.toolName) {
+        results.push(toolAllowlistGate(config.toolName, config.allowedTools));
+    }
     return aggregateGates(results);
 }
 //# sourceMappingURL=gates.js.map

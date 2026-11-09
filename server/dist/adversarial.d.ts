@@ -43,6 +43,8 @@ export declare class CollusionDetector {
      */
     detectCollusion(): {
         rings: string[][];
+        /** True when the ring search hit its ring or step limit; more rings may exist. */
+        ringsTruncated: boolean;
         unusualFrequency: Array<{
             pair: string[];
             count: number;
@@ -52,6 +54,12 @@ export declare class CollusionDetector {
             window: number;
         }>;
     };
+    /** Longest ring reported (number of agents). */
+    private static readonly MAX_RING_LENGTH;
+    /** Rings reported at most; a dense graph has exponentially many. */
+    private static readonly MAX_RINGS;
+    /** Edge visits allowed per detection, so search time stays bounded on any graph. */
+    private static readonly MAX_SEARCH_STEPS;
     private detectRings;
     private detectUnusualFrequency;
     private detectCoordinatedTiming;
@@ -64,21 +72,29 @@ interface MemoryProposal {
     timestamp: number;
     votes: Map<string, boolean>;
     resolved: boolean;
-    result?: {
-        approved: boolean;
-        votes: {
-            for: number;
-            against: number;
-            total: number;
-        };
-        threshold: number;
+    result?: QuorumResult;
+}
+interface QuorumResult {
+    approved: boolean;
+    votes: {
+        for: number;
+        against: number;
+        total: number;
     };
+    threshold: number;
+    minVoters: number;
 }
 export declare class MemoryQuorum {
     private proposals;
     private threshold;
+    private minVoters;
     private maxProposals;
-    constructor(threshold?: number);
+    /**
+     * @param threshold  Share of "for" votes needed (default 2/3).
+     * @param minVoters  Votes needed before a proposal can pass, the proposer's included
+     *                   (default 3). Without it a proposer approves its own write 1/1.
+     */
+    constructor(threshold?: number, minVoters?: number);
     /**
      * Create a new memory-write proposal. The proposer automatically votes yes.
      * Returns the proposal id.
@@ -95,15 +111,7 @@ export declare class MemoryQuorum {
      *
      * @throws If the proposal does not exist.
      */
-    resolve(proposalId: string): {
-        approved: boolean;
-        votes: {
-            for: number;
-            against: number;
-            total: number;
-        };
-        threshold: number;
-    };
+    resolve(proposalId: string): QuorumResult;
     /**
      * Retrieve a deep copy of a proposal (or null if not found).
      */

@@ -227,3 +227,54 @@ describe('MemoryQuorum', () => {
     });
   });
 });
+
+// ============================================================
+// Bounds: cycle search and quorum size
+// ============================================================
+
+describe('CollusionDetector — bounded ring search', () => {
+  it('finds the ring in a triangle', () => {
+    const detector = new CollusionDetector();
+    detector.recordInteraction('A', 'B', 'm');
+    detector.recordInteraction('B', 'C', 'm');
+    detector.recordInteraction('C', 'A', 'm');
+    expect(detector.detectCollusion().rings).toEqual([['A', 'B', 'C']]);
+  });
+
+  it('stays fast and bounded on a complete graph of 9 agents', () => {
+    const detector = new CollusionDetector();
+    const agents = Array.from({ length: 9 }, (_, i) => `agent-${i}`);
+    for (const a of agents) for (const b of agents) if (a !== b) detector.recordInteraction(a, b, 'm');
+
+    const start = Date.now();
+    const result = detector.detectCollusion();
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(result.rings.length).toBeGreaterThan(0);
+    expect(result.rings.length).toBeLessThanOrEqual(100);
+    expect(result.ringsTruncated).toBe(true);
+  });
+});
+
+describe('MemoryQuorum — minimum number of voters', () => {
+  it('does not approve a proposal on the proposer\'s own vote', () => {
+    const quorum = new MemoryQuorum();
+    const id = quorum.propose('key', 'value', 'agent-1');
+    const result = quorum.resolve(id);
+    expect(result.approved).toBe(false);
+    expect(result.votes.total).toBe(1);
+  });
+
+  it('does not approve 2 of 2 votes below the default quorum of 3', () => {
+    const quorum = new MemoryQuorum();
+    const id = quorum.propose('key', 'value', 'agent-1');
+    quorum.vote(id, 'agent-2', true);
+    expect(quorum.resolve(id).approved).toBe(false);
+  });
+
+  it('honors a custom minimum', () => {
+    const quorum = new MemoryQuorum(0.67, 2);
+    const id = quorum.propose('key', 'value', 'agent-1');
+    quorum.vote(id, 'agent-2', true);
+    expect(quorum.resolve(id).approved).toBe(true);
+  });
+});

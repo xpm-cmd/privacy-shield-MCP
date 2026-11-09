@@ -200,12 +200,16 @@ const PROMPT_INJECTION_PATTERNS: PromptInjectionPattern[] = [
 
 const CODE_PATTERNS: CodePattern[] = [
   // Ejecucion de sistema
-  { pattern: /child_process\s*[.(]|require\s*\(\s*['"]child_process['"]\s*\)/, risk: "high", desc: "Acceso a child_process (ejecucion de comandos)" },
-  { pattern: /\.exec\s*\(|\.spawn\s*\(|\.execSync\s*\(/, risk: "high", desc: "Ejecucion de comandos del sistema" },
-  { pattern: /subprocess|os\.system|os\.popen|os\.exec/, risk: "high", desc: "Ejecucion de comandos del sistema (Python)" },
-  // Note: eval() pattern - this is a detection rule, not actual eval usage
-  { pattern: /eval\s*\(/, risk: "high", desc: "eval() -- ejecucion dinamica de codigo" },
-  { pattern: /Function\s*\(/, risk: "high", desc: "Constructor Function (ejecucion dinamica)" },
+  // require()/import()/ESM "from" of child_process, with or without the node: prefix
+  { pattern: /child_process\s*[.(]|(?:require\s*\(\s*|import\s*\(\s*|from\s+)['"](?:node:)?child_process['"]/, risk: "high", desc: "Acceso a child_process (ejecucion de comandos)" },
+  // Bare calls (after destructuring, or Python's exec builtin) and method calls that are
+  // unambiguous. A plain ".exec(" is left out: it is almost always RegExp.prototype.exec.
+  { pattern: /(?<![\w$.])(?:exec|execSync|execFile|execFileSync|spawn|spawnSync)\s*\(|\.(?:execSync|execFile|execFileSync|spawn|spawnSync)\s*\(|\b(?:child_process|childProcess|cp)\.exec\s*\(/, risk: "high", desc: "Ejecucion de comandos del sistema" },
+  { pattern: /\bos\.(?:system|popen|exec[lv]p?e?)\s*\(|\bshell\s*=\s*True\b/, risk: "high", desc: "Ejecucion de comandos del sistema (Python)" },
+  { pattern: /\bsubprocess\b/, risk: "medium", desc: "Uso de subprocess (Python) -- verificar que no use shell=True ni entrada no confiable" },
+  // Detection rules, not actual usage. Lookbehinds skip model.eval(), retrieval(), isFunction().
+  { pattern: /(?<![\w$.])eval\s*\(/, risk: "high", desc: "eval() -- ejecucion dinamica de codigo" },
+  { pattern: /(?<![\w$.])Function\s*\(/, risk: "high", desc: "Constructor Function (ejecucion dinamica)" },
   { pattern: /__import__\s*\(/, risk: "high", desc: "Import dinamico Python" },
 
   // Acceso a datos sensibles
@@ -229,6 +233,10 @@ const CODE_PATTERNS: CodePattern[] = [
   // Serializacion insegura
   { pattern: /pickle\.loads?\s*\(/, risk: "high", desc: "Deserializacion pickle (ejecucion arbitraria de codigo)" },
   { pattern: /yaml\.load\s*\((?!.*Loader)/, risk: "high", desc: "yaml.load sin Loader seguro" },
+  { pattern: /\btorch\.load\s*\((?![^)]*weights_only\s*=\s*True)/, risk: "high", desc: "torch.load sin weights_only=True (deserializa pickle)" },
+
+  // Transporte
+  { pattern: /\bverify\s*=\s*False\b|rejectUnauthorized\s*:\s*false|NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['"]?0/, risk: "medium", desc: "Verificacion TLS desactivada (riesgo MITM)" },
   { pattern: /JSON\.parse\s*\(\s*(?!.*try)/, risk: "low", desc: "JSON.parse sin try-catch" },
 
   // Crypto (contexto de ransomware)
@@ -566,13 +574,15 @@ export function analyzeCode(code: string, filePath?: string): AnalysisResult {
 
   for (const { pattern, risk, desc } of CODE_PATTERNS) {
     const flags = pattern.flags.includes("g") ? pattern.flags : pattern.flags + "g";
-    const matches = code.match(new RegExp(pattern.source, flags));
-    if (matches) {
+    const matches = [...code.matchAll(new RegExp(pattern.source, flags))];
+    if (matches.length > 0) {
+      const first = matches[0];
       findings.push({
         category: "code",
         description: `${desc} (${matches.length}x)`,
         risk,
-        detail: matches[0].slice(0, 100),
+        detail: first[0].slice(0, 100),
+        line: code.slice(0, first.index).split("\n").length,
       });
       if (RISK_ORDER[risk] > RISK_ORDER[maxRisk]) maxRisk = risk;
     }
