@@ -351,4 +351,72 @@ describe('analyzeCode', () => {
       expect(result.findings.length).toBeGreaterThan(0);
     });
   });
+
+  // Strings the file hook watches for are assembled from parts (see top of file)
+  const fake = (...parts: string[]) => parts.join('');
+  const descs = (code: string) => analyzeCode(code).findings.map(f => f.description);
+
+  describe('should not flag look-alike identifiers', () => {
+    it('ignores RegExp.prototype.exec calls', () => {
+      expect(descs('const m = /a(b)/.exec(text);').some(d => d.startsWith('Ejecucion de comandos'))).toBe(false);
+    });
+
+    it('ignores model.eval() and words that end in "eval("', () => {
+      expect(descs(fake('model.', 'eval', '()')).some(d => d.startsWith('eval()'))).toBe(false);
+      expect(descs('docs = retrieval(query)').some(d => d.startsWith('eval()'))).toBe(false);
+    });
+
+    it('ignores identifiers that end in "Function("', () => {
+      expect(descs('if (isFunction(cb)) cb();').some(d => d.startsWith('Constructor Function'))).toBe(false);
+    });
+  });
+
+  describe('should detect execution APIs in their modern forms', () => {
+    it('detects ESM imports of node:child_process', () => {
+      const code = fake('import { spawn } from "node:child', '_process";');
+      expect(analyzeCode(code).safe).toBe(false);
+    });
+
+    it('detects bare spawn/exec calls after destructuring', () => {
+      expect(descs('spawn("ls", ["-la"])').some(d => d.startsWith('Ejecucion de comandos'))).toBe(true);
+    });
+
+    it('detects the Function constructor', () => {
+      expect(descs(fake('const f = new Func', 'tion("return 1");')).some(d => d.startsWith('Constructor Function'))).toBe(true);
+    });
+
+    it('detects the Python exec() builtin', () => {
+      expect(descs('exec(user_code)').some(d => d.startsWith('Ejecucion de comandos'))).toBe(true);
+    });
+  });
+
+  describe('Python-specific risks', () => {
+    it('rates shell=True above a plain subprocess call', () => {
+      const plain = analyzeCode("import subprocess\nsubprocess.run(['ls'])");
+      const shell = analyzeCode(fake('import subprocess\nsubprocess.', 'run(cmd, shell', '=True)'));
+      expect(plain.risk_level).toBe('medium');
+      expect(shell.risk_level).toBe('high');
+    });
+
+    it('keeps os.system at high risk', () => {
+      expect(analyzeCode(fake('import os\nos.sys', 'tem("whoami")')).risk_level).toBe('high');
+    });
+
+    it('detects torch.load without weights_only=True', () => {
+      expect(descs('model = torch.load(path)').some(d => d.startsWith('torch.load'))).toBe(true);
+      expect(descs('model = torch.load(path, weights_only=True)').some(d => d.startsWith('torch.load'))).toBe(false);
+    });
+
+    it('detects disabled TLS verification', () => {
+      expect(descs('requests.get(url, verify=False)').some(d => d.startsWith('Verificacion TLS'))).toBe(true);
+    });
+  });
+
+  describe('finding locations', () => {
+    it('reports the line of the first match', () => {
+      const code = fake('import os\n\nos.sys', 'tem("whoami")');
+      const finding = analyzeCode(code).findings.find(f => f.description.includes('(Python)'));
+      expect(finding?.line).toBe(3);
+    });
+  });
 });

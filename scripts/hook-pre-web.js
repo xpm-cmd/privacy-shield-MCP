@@ -19,9 +19,19 @@ process.stdin.on('end', () => {
 
   const urlLower = url.toLowerCase();
 
-  // Extract domain from URL
-  const domainMatch = urlLower.match(/^https?:\/\/([^/:]+)/);
-  const domain = domainMatch ? domainMatch[1] : '';
+  // Take the host from the WHATWG URL parser, the same one the fetch will use. A regex
+  // over the raw string sees "user@bit.ly" for https://user@bit.ly/ and misses
+  // "bit.ly." (trailing dot) or "https:bit.ly", so every check below could be bypassed.
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    printBox('block', t('URL no válida', 'Invalid URL'),
+      t('No se pudo interpretar la URL, así que no se puede verificar su destino', 'The URL could not be parsed, so its destination cannot be checked'),
+      t('Usa una URL absoluta con https://', 'Use an absolute https:// URL'));
+    process.exit(2);
+  }
+  const domain = parsed.hostname.toLowerCase().replace(/\.+$/, '');
 
   // ── Block exfiltration/C2 domains ──
   const exfilPatterns = [
@@ -57,7 +67,7 @@ process.stdin.on('end', () => {
   }
 
   // ── Block dangerous protocols ──
-  if (/^(javascript|vbscript|data:text\/html):/i.test(url)) {
+  if (['javascript:', 'vbscript:', 'data:'].includes(parsed.protocol)) {
     printBox('block', t('Protocolo peligroso detectado', 'Dangerous protocol detected'),
       t('javascript:, vbscript: y data: pueden ejecutar código arbitrario', 'javascript:, vbscript: and data: can execute arbitrary code'),
       t('Usa URLs con https:// únicamente', 'Use URLs with https:// only'));
@@ -65,7 +75,9 @@ process.stdin.on('end', () => {
   }
 
   // ── Block high-risk TLDs ──
-  const riskyTLDs = ['.tk', '.ml', '.ga', '.cf', '.gq', '.buzz', '.zip', '.mov'];
+  // Keep in sync with HIGH_RISK_TLDS in server/src/network.ts
+  const riskyTLDs = ['.tk', '.ml', '.ga', '.cf', '.gq', '.buzz', '.top', '.xyz', '.club',
+    '.work', '.click', '.link', '.zip', '.mov'];
   const tldMatch = domain.match(/\.[^.]+$/);
   if (tldMatch && riskyTLDs.includes(tldMatch[0])) {
     printBox('block', `${t('TLD de alto riesgo', 'High-risk TLD')}: ${tldMatch[0]}`,

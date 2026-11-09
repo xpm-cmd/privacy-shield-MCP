@@ -18,6 +18,8 @@ export interface Finding {
   risk: RiskLevel;
   detail?: string;
   confidence?: number;
+  /** 1-based line of the first match, when the finding comes from scanning source text */
+  line?: number;
 }
 
 export interface AnalysisResult {

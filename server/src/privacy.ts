@@ -20,6 +20,26 @@ interface DetectionPattern {
   pattern: RegExp;
   risk: RiskLevel;
   redact: (match: string) => string;
+  /** Optional second check on a regex match (checksum, value range) to cut false positives. */
+  validate?: (match: RegExpExecArray) => boolean;
+}
+
+/** Luhn checksum: real card numbers pass it, random 13-19 digit ids almost never do. */
+function luhnValid(digits: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let d = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 1) { d *= 2; if (d > 9) d -= 9; }
+    sum += d;
+  }
+  return sum % 10 === 0;
+}
+
+/** A lat/lon pair must be in range and not hug 0,0 (where plain numeric pairs live). */
+function plausibleCoordinates(m: RegExpExecArray): boolean {
+  const lat = Number(m[1]);
+  const lon = Number(m[2]);
+  return Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && (Math.abs(lat) >= 1 || Math.abs(lon) >= 1);
 }
 
 interface PrivacyFinding {
@@ -77,44 +97,88 @@ const DETECTION_PATTERNS: DetectionPattern[] = [
   {
     name: "Clave privada SSH/PEM",
     type: "secret",
-    pattern: /-----BEGIN\s+(RSA\s+|EC\s+|OPENSSH\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END/gi,
+    pattern: /-----BEGIN\s+(?:RSA\s+|EC\s+|DSA\s+|OPENSSH\s+|ENCRYPTED\s+|PGP\s+)?PRIVATE\s+KEY(?:\s+BLOCK)?-----[\s\S]*?-----END/gi,
     risk: "critical",
     redact: () => "-----BEGIN PRIVATE KEY-----\n****REDACTED****\n-----END PRIVATE KEY-----",
   },
   {
+    name: "Credenciales en URL",
+    type: "secret",
+    // scheme://user:password@host — the password part has no "/", "@" or quotes
+    pattern: /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@'"]+:[^\s/@'"]{3,}@[^\s'"]+/gi,
+    risk: "high",
+    redact: (m: string) => m.replace(/^([^:]+:\/\/[^:]+:)[^@]+@/, "$1****REDACTED****@"),
+  },
+  {
     name: "Password en texto plano",
     type: "secret",
-    pattern: /(?:password|passwd|pwd|contraseña)\s*[:=]\s*['"]?([^\s'"]{6,})['"]?/gi,
+    // Key may carry a prefix/suffix (db_password, "password"). The value must be either a
+    // quoted literal without spaces, or a bare value that contains a digit or symbol and is
+    // not a reference (env lookup, attribute access, template, call or type annotation).
+    pattern: /[\w-]*(?:password|passwd|pwd|contraseña)[\w-]*["']?\s*[:=]\s*(?:(["'])[^"'\s]{6,}\1|(?![$%{<])(?!(?:process\.env|os\.environ|import\.meta|env|settings|config|self|this|props|args|request)\b)(?=[^\s'"(),;{}[\]<>]*[\d!@#%^&*+~])[^\s'"(),;{}[\]<>]{6,}(?![(\w.]))/gi,
     risk: "critical",
-    redact: (m: string) => m.replace(/[:=]\s*['"]?([^\s'"]{6,})['"]?/, ": ****REDACTED****"),
+    redact: (m: string) => m.replace(/([:=]\s*).*$/s, "$1****REDACTED****"),
+    // passwordLabel="Password", password_hash=…, passwordRules: … name a field, not a secret
+    validate: (m) => !/(?:hash|hashed|label|placeholder|hint|rules|policy|field|input)["']?\s*$/i.test(m[0].split(/[:=]/)[0]),
   },
   {
     name: "Token de GitHub",
     type: "secret",
-    pattern: /gh[ps]_[a-zA-Z0-9]{36,}/g,
+    pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})/g,
     risk: "critical",
     redact: (m: string) => m.slice(0, 6) + "****REDACTED****",
   },
   {
     name: "Anthropic API Key",
     type: "secret",
-    pattern: /sk-ant-[a-zA-Z0-9_-]{20,}/g,
+    pattern: /\bsk-ant-[a-zA-Z0-9_-]{20,}/g,
     risk: "critical",
     redact: (_m: string) => "sk-ant-****REDACTED****",
   },
   {
     name: "OpenAI API Key",
     type: "secret",
-    pattern: /sk-(?!ant-)[a-zA-Z0-9]{20,}/g,
+    // Project/service-account/admin keys (sk-proj-…, may contain - and _) and legacy sk-<alnum>
+    pattern: /\bsk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|(?!ant-)[A-Za-z0-9]{20,}\b)/g,
     risk: "critical",
     redact: (_m: string) => "sk-****REDACTED****",
   },
   {
+    name: "Google API Key",
+    type: "secret",
+    pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g,
+    risk: "critical",
+    redact: (m: string) => m.slice(0, 6) + "****REDACTED****",
+  },
+  {
+    name: "Token de Slack",
+    type: "secret",
+    pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+    risk: "critical",
+    redact: (m: string) => m.slice(0, 5) + "****REDACTED****",
+  },
+  {
+    name: "Token de Hugging Face",
+    type: "secret",
+    pattern: /\bhf_[A-Za-z0-9]{30,}\b/g,
+    risk: "critical",
+    redact: (_m: string) => "hf_****REDACTED****",
+  },
+  {
+    name: "Stripe live key",
+    type: "secret",
+    pattern: /\b[sr]k_live_[A-Za-z0-9]{20,}/g,
+    risk: "critical",
+    redact: (m: string) => m.slice(0, 8) + "****REDACTED****",
+  },
+  {
     name: "Variable .env con secreto",
     type: "secret",
-    pattern: /^[A-Z_]*(SECRET|TOKEN|KEY|PASSWORD|CREDENTIAL|AUTH)[A-Z_]*\s*=\s*.+$/gim,
+    // dotenv style only: UPPER_CASE name, "=" with no spaces (code constants use "X = 1"),
+    // a non-empty value that is not a bare number, empty quotes or a $reference.
+    pattern: /^(?:export\s+)?[A-Z0-9_]*(?:SECRET|TOKEN|KEY|PASSWORD|PASSWD|CREDENTIAL|AUTH)[A-Z0-9_]*=(?![\d.]+\s*$)(?!(["'])\1\s*$)(?!\$)\S.*$/gm,
     risk: "high",
-    redact: (m: string) => m.replace(/=\s*.+$/, "= ****REDACTED****"),
+    redact: (m: string) => m.replace(/=.*$/, "=****REDACTED****"),
   },
   // --- PII: Datos Personales ---
   {
@@ -130,7 +194,9 @@ const DETECTION_PATTERNS: DetectionPattern[] = [
   {
     name: "Teléfono (formato internacional)",
     type: "pii",
-    pattern: /(?:(?:tel|phone|fax|móvil|celular|teléfono|whatsapp)\s*[:=]?\s*)?\+\d{1,3}[-.\s]\(?\d{2,4}\)?[-.\s]\d{3,4}[-.\s]?\d{3,4}\b/gi,
+    // Separators are optional so E.164 (+56912345678) is caught; the area code may be one
+    // digit (+56 9 …). The lookbehind keeps "3+12345678" (arithmetic) out.
+    pattern: /(?:(?:tel|phone|fax|móvil|celular|teléfono|whatsapp)\s*[:=]?\s*)?(?<![\w+])\+\d{1,3}[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}\b/gi,
     risk: "medium",
     redact: (m: string) => m.slice(0, 4) + "****" + m.slice(-2),
   },
@@ -161,6 +227,7 @@ const DETECTION_PATTERNS: DetectionPattern[] = [
     pattern: /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b/g,
     risk: "critical",
     redact: (m: string) => "**** **** **** " + m.slice(-4),
+    validate: (m) => luhnValid(m[0]),
   },
   {
     name: "IBAN",
@@ -186,9 +253,11 @@ const DETECTION_PATTERNS: DetectionPattern[] = [
   {
     name: "Coordenadas GPS",
     type: "pii",
-    pattern: /[-+]?\d{1,3}\.\d{4,},\s*[-+]?\d{1,3}\.\d{4,}/g,
+    // Exactly a pair: not preceded by another number in a list, not followed by a third one
+    pattern: /(?<![\d.]\s*,\s*|[\d.])([-+]?\d{1,3}\.\d{4,}),\s*([-+]?\d{1,3}\.\d{4,})(?!\d|\s*,\s*[-+]?\d)/g,
     risk: "medium",
     redact: () => "[COORDS_REDACTED]",
+    validate: plausibleCoordinates,
   },
 ];
 
@@ -207,6 +276,7 @@ export function analyzePrivacy(text: string): PrivacyResult {
     dp.pattern.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = dp.pattern.exec(text)) !== null) {
+      if (dp.validate && !dp.validate(match)) continue;
       const rawMatch = match[0];
       const redacted = dp.redact(rawMatch);
 
@@ -223,8 +293,9 @@ export function analyzePrivacy(text: string): PrivacyResult {
         redacted,
       });
 
-      // Redactar en el texto
-      redactedText = redactedText.replace(rawMatch, redacted);
+      // Redactar en el texto. split/join instead of String.replace: a replacement string
+      // is parsed for $&, $1 … and a redaction holding "$&" would re-insert the raw secret.
+      redactedText = redactedText.split(rawMatch).join(redacted);
 
       if (riskOrder[dp.risk] > riskOrder[maxRisk]) {
         maxRisk = dp.risk;
