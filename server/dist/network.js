@@ -39,29 +39,68 @@ const KNOWN_MALICIOUS_PATTERNS = [
     /dnslog\./i, // DNS exfiltration
     /canarytokens\.com/i, // Tracking tokens
 ];
-/** Patrones de URL sospechosos */
+/**
+ * Patrones de URL sospechosos. `part` says which piece of the URL the pattern reads:
+ * the whole URL, the authority (userinfo@host:port) or the path. A host ending in ".com"
+ * or ".sh" is a TLD, not a file extension, and an "@" in a path is not a credential.
+ */
 const SUSPICIOUS_URL_PATTERNS = [
-    { pattern: /javascript:/i, reason: "Protocolo javascript: (posible XSS)" },
-    { pattern: /data:text\/html/i, reason: "Data URI con HTML (posible XSS)" },
-    { pattern: /vbscript:/i, reason: "Protocolo VBScript" },
-    { pattern: /@/, reason: "URL con credenciales embebidas (@)" },
-    { pattern: /\.(exe|bat|cmd|ps1|msi|scr|pif|com|vbs|wsf)(\?|$)/i, reason: "Descarga de ejecutable" },
-    { pattern: /\.(sh|bash|zsh)(\?|$)/i, reason: "Descarga de script shell" },
-    { pattern: /[?&](cmd|exec|command|run|eval)=/i, reason: "Parámetro de ejecución en query string" },
-    { pattern: /(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)/, reason: "IP directa en lugar de dominio" },
-    { pattern: /%[0-9a-f]{2}%[0-9a-f]{2}%[0-9a-f]{2}/i, reason: "URL con encoding excesivo (posible ofuscación)" },
-    { pattern: /https?:\/\/[^/]*--[^/]*\./i, reason: "Dominio con doble guión (posible punycode attack)" },
+    { pattern: /javascript:/i, reason: "Protocolo javascript: (posible XSS)", part: 'url' },
+    { pattern: /data:text\/html/i, reason: "Data URI con HTML (posible XSS)", part: 'url' },
+    { pattern: /vbscript:/i, reason: "Protocolo VBScript", part: 'url' },
+    { pattern: /@/, reason: "URL con credenciales embebidas (@)", part: 'authority' },
+    { pattern: /\.(exe|bat|cmd|ps1|msi|scr|pif|com|vbs|wsf)$/i, reason: "Descarga de ejecutable", part: 'path' },
+    { pattern: /\.(sh|bash|zsh)$/i, reason: "Descarga de script shell", part: 'path' },
+    { pattern: /[?&](cmd|exec|command|run|eval)=/i, reason: "Parámetro de ejecución en query string", part: 'url' },
+    { pattern: /(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)/, reason: "IP directa en lugar de dominio", part: 'url' },
+    { pattern: /%[0-9a-f]{2}%[0-9a-f]{2}%[0-9a-f]{2}/i, reason: "URL con encoding excesivo (posible ofuscación)", part: 'url' },
+    { pattern: /--[^/]*\./i, reason: "Dominio con doble guión (posible punycode attack)", part: 'authority' },
 ];
+/**
+ * Marcas imitadas con frecuencia. `legit` son los dominios reales de la marca: ellos y sus
+ * subdominios (www.google.com, api.github.com, registry.npmjs.org) no son typosquatting.
+ */
+const TYPOSQUAT_BRANDS = [
+    {
+        real: "github.com",
+        legit: ["github.com", "github.io", "githubusercontent.com", "githubassets.com", "githubapp.com"],
+        fakes: [/g[il1]thub/i, /guthub/i, /githuh/i],
+    },
+    {
+        real: "google.com",
+        legit: ["google.com", "googleapis.com", "googleusercontent.com", "googlesource.com", "googlevideo.com", "googletagmanager.com"],
+        legitPattern: /(?:^|\.)google\.(?:com?\.)?[a-z]{2,3}$/, // google.de, google.co.uk
+        fakes: [/g[o0]{2}gle/i, /gogle/i, /googl[e3]/i],
+    },
+    { real: "anthropic.com", legit: ["anthropic.com"], fakes: [/anth[r0]pic/i, /anthroplc/i] },
+    { real: "npmjs.com", legit: ["npmjs.com", "npmjs.org"], fakes: [/npmj[s5]/i, /npm-js/i] },
+];
+/** domain is d or a subdomain of d */
+function isSameOrSubdomain(domain, d) {
+    return domain === d || domain.endsWith("." + d);
+}
+function isUrlShortener(domain) {
+    for (const s of URL_SHORTENERS) {
+        if (isSameOrSubdomain(domain, s))
+            return true;
+    }
+    return false;
+}
 function extractDomain(url) {
     try {
         const parsed = new URL(url);
-        return parsed.hostname.toLowerCase();
+        return parsed.hostname.toLowerCase().replace(/\.$/, "");
     }
     catch {
         // Si no es parseable, intentar extraer dominio manualmente
-        const match = url.match(/(?:https?:\/\/)?([^/:?\s]+)/);
-        return match ? match[1].toLowerCase() : "";
+        const match = url.match(/(?:https?:\/\/)?(?:[^/@\s]*@)?([^/:?\s]+)/);
+        return match ? match[1].toLowerCase().replace(/\.$/, "") : "";
     }
+}
+/** The authority (userinfo@host:port) and path of a URL, for patterns that read only one of them. */
+function urlParts(url) {
+    const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)([^?#]*)/i.exec(url);
+    return m ? { authority: m[1], path: m[2] } : { authority: "", path: url.split(/[?#]/)[0] };
 }
 function getTLD(domain) {
     const parts = domain.split(".");
@@ -77,8 +116,8 @@ function analyzeUrl(url) {
     const riskOrder = { safe: 0, low: 1, medium: 2, high: 3, critical: 4 };
     const domain = extractDomain(url);
     const tld = getTLD(domain);
-    // 1. Verificar acortadores
-    if (URL_SHORTENERS.has(domain)) {
+    // 1. Verificar acortadores (también www.bit.ly y otros subdominios)
+    if (isUrlShortener(domain)) {
         reasons.push(`🔗 Acortador de URL: ${domain} (oculta el destino real)`);
         risk = "high";
         status = "blocked";
@@ -101,8 +140,10 @@ function analyzeUrl(url) {
         }
     }
     // 4. Verificar patrones sospechosos en la URL
-    for (const { pattern, reason } of SUSPICIOUS_URL_PATTERNS) {
-        if (pattern.test(url)) {
+    const parts = urlParts(url);
+    for (const { pattern, reason, part } of SUSPICIOUS_URL_PATTERNS) {
+        const subject = part === 'authority' ? parts.authority : part === 'path' ? parts.path : url;
+        if (pattern.test(subject)) {
             reasons.push(`🔍 ${reason}`);
             if (riskOrder["medium"] > riskOrder[risk])
                 risk = "medium";
@@ -127,22 +168,14 @@ function analyzeUrl(url) {
             status = "suspicious";
     }
     // 7. Detección de homoglyph/typosquatting en dominios populares
-    const typosquatPatterns = [
-        { real: "github.com", fakes: [/g[il1]thub/i, /guthub/i, /githuh/i] },
-        { real: "google.com", fakes: [/g[o0]{2}gle/i, /gogle/i, /googl[e3]/i] },
-        { real: "anthropic.com", fakes: [/anth[r0]pic/i, /anthroplc/i] },
-        { real: "npmjs.com", fakes: [/npmj[s5]/i, /npm-js/i] },
-    ];
-    for (const { real, fakes } of typosquatPatterns) {
-        if (domain !== real) {
-            for (const fake of fakes) {
-                if (fake.test(domain) && domain !== real) {
-                    reasons.push(`🎭 Posible typosquatting: "${domain}" parece imitar "${real}"`);
-                    risk = "high";
-                    status = "blocked";
-                    break;
-                }
-            }
+    for (const { real, legit, legitPattern, fakes } of TYPOSQUAT_BRANDS) {
+        const isLegit = legit.some(d => isSameOrSubdomain(domain, d)) || (legitPattern?.test(domain) ?? false);
+        if (isLegit)
+            continue;
+        if (fakes.some(fake => fake.test(domain))) {
+            reasons.push(`🎭 Posible typosquatting: "${domain}" parece imitar "${real}"`);
+            risk = "high";
+            status = "blocked";
         }
     }
     return { url, status, risk, reasons };
@@ -189,9 +222,9 @@ export function analyzeNetwork(text) {
  * Verifica si un dominio destino es seguro para enviar datos
  */
 export function isDomainSafeForDataSending(domain) {
-    const d = domain.toLowerCase();
+    const d = domain.toLowerCase().replace(/\.$/, "");
     // Verificar contra listas
-    if (URL_SHORTENERS.has(d)) {
+    if (isUrlShortener(d)) {
         return { safe: false, reason: "Acortador de URL — destino real desconocido" };
     }
     for (const pattern of KNOWN_MALICIOUS_PATTERNS) {

@@ -172,60 +172,73 @@ export class CollusionDetector {
      * Run all collusion heuristics and return aggregated results.
      */
     detectCollusion() {
+        const { rings, truncated } = this.detectRings();
         return {
-            rings: this.detectRings(),
+            rings,
+            ringsTruncated: truncated,
             unusualFrequency: this.detectUnusualFrequency(),
             coordinatedTiming: this.detectCoordinatedTiming(),
         };
     }
-    // --- Ring detection via DFS cycle finding ---
+    // --- Ring detection via bounded DFS cycle finding ---
+    /** Longest ring reported (number of agents). */
+    static MAX_RING_LENGTH = 10;
+    /** Rings reported at most; a dense graph has exponentially many. */
+    static MAX_RINGS = 100;
+    /** Edge visits allowed per detection, so search time stays bounded on any graph. */
+    static MAX_SEARCH_STEPS = 50_000;
     detectRings() {
-        // Build adjacency list
-        const adj = new Map();
+        // Build adjacency list (sorted for deterministic output)
+        const adjSets = new Map();
         for (const { from, to } of this.interactions) {
-            if (!adj.has(from))
-                adj.set(from, new Set());
-            adj.get(from).add(to);
+            if (!adjSets.has(from))
+                adjSets.set(from, new Set());
+            adjSets.get(from).add(to);
         }
+        const adj = new Map();
+        for (const [node, next] of adjSets)
+            adj.set(node, [...next].sort());
         const rings = [];
-        const visited = new Set();
-        const ringSet = new Set(); // dedup serialised rings
-        const dfs = (node, path) => {
-            if (path.length > 10)
-                return; // max depth
-            const neighbours = adj.get(node);
-            if (!neighbours)
-                return;
-            for (const next of neighbours) {
-                const cycleStart = path.indexOf(next);
-                if (cycleStart !== -1) {
-                    const cycle = path.slice(cycleStart);
-                    if (cycle.length >= 3) {
-                        // Normalise: rotate so smallest element comes first
-                        const minIdx = cycle.indexOf(cycle.reduce((a, b) => (a < b ? a : b)));
-                        const normalised = [
-                            ...cycle.slice(minIdx),
-                            ...cycle.slice(0, minIdx),
-                        ];
-                        const key = normalised.join('->');
-                        if (!ringSet.has(key)) {
-                            ringSet.add(key);
-                            rings.push(normalised);
-                        }
+        let steps = 0;
+        let truncated = false;
+        // Each simple cycle is reported once, rotated to start at its smallest agent: the search
+        // from `start` only walks through agents that sort after `start`, so no ring is found
+        // twice and no dedup set is needed.
+        for (const start of [...adj.keys()].sort()) {
+            const path = [start];
+            const onPath = new Set(path);
+            const dfs = (node) => {
+                for (const next of adj.get(node) ?? []) {
+                    if (++steps > CollusionDetector.MAX_SEARCH_STEPS) {
+                        truncated = true;
+                        return;
                     }
-                    continue;
+                    if (next === start) {
+                        if (path.length >= 3) {
+                            rings.push([...path]);
+                            if (rings.length >= CollusionDetector.MAX_RINGS) {
+                                truncated = true;
+                                return;
+                            }
+                        }
+                        continue;
+                    }
+                    if (next < start || onPath.has(next) || path.length >= CollusionDetector.MAX_RING_LENGTH)
+                        continue;
+                    path.push(next);
+                    onPath.add(next);
+                    dfs(next);
+                    onPath.delete(next);
+                    path.pop();
+                    if (truncated)
+                        return;
                 }
-                if (!visited.has(next)) {
-                    dfs(next, [...path, next]);
-                }
-            }
-        };
-        for (const node of adj.keys()) {
-            visited.clear();
-            dfs(node, [node]);
-            visited.add(node);
+            };
+            dfs(start);
+            if (truncated)
+                break;
         }
-        return rings;
+        return { rings, truncated };
     }
     // --- Unusual frequency detection ---
     detectUnusualFrequency() {
@@ -279,9 +292,16 @@ export class CollusionDetector {
 export class MemoryQuorum {
     proposals = new Map();
     threshold;
+    minVoters;
     maxProposals = 1000;
-    constructor(threshold = 0.67) {
+    /**
+     * @param threshold  Share of "for" votes needed (default 2/3).
+     * @param minVoters  Votes needed before a proposal can pass, the proposer's included
+     *                   (default 3). Without it a proposer approves its own write 1/1.
+     */
+    constructor(threshold = 0.67, minVoters = 3) {
         this.threshold = threshold;
+        this.minVoters = Math.max(1, Math.floor(minVoters));
     }
     /**
      * Create a new memory-write proposal. The proposer automatically votes yes.
@@ -353,11 +373,12 @@ export class MemoryQuorum {
             }
         }
         const total = forCount + againstCount;
-        const approved = total > 0 && forCount / total >= this.threshold;
+        const approved = total >= this.minVoters && forCount / total >= this.threshold;
         const result = {
             approved,
             votes: { for: forCount, against: againstCount, total },
             threshold: this.threshold,
+            minVoters: this.minVoters,
         };
         proposal.resolved = true;
         proposal.result = result;

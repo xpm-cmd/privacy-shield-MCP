@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "test": "cd server && npm test",
-    "test:hooks": "node scripts/test-hook-pre-file.js && node scripts/test-hook-pre-web.js",
+    "test:hooks": "node scripts/test-hooks-config.js && node scripts/test-hook-pre-bash.js && node scripts/test-hook-pre-file.js && node scripts/test-hook-pre-web.js",
     "build": "cd server && npm run build"
   }
 }

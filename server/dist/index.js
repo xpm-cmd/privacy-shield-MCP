@@ -260,7 +260,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         {
             name: 'quorum_vote',
-            description: 'Valida una escritura de memoria via votacion Byzantine (requiere 2/3 mayoria). Propone, vota y resuelve.',
+            description: 'Valida una escritura de memoria via votacion Byzantine (requiere 2/3 mayoria y al menos 3 votantes, incluido el proponente). Propone, vota y resuelve.',
             inputSchema: {
                 type: 'object',
                 properties: {
@@ -615,7 +615,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     throw new Error("Se requiere el parametro 'content'");
                 const diffSizeThreshold = args?.diff_lines;
                 const allowedTools = args?.allowed_tools;
-                const result = runAllGates(content, { diffSizeThreshold, allowedTools });
+                const toolName = args?.tool_name;
+                const result = runAllGates(content, { diffSizeThreshold, allowedTools, toolName });
                 if (result) {
                     recordScan('gates', result.decision !== 'allow', Date.now() - startTime);
                     await logEntry({ event: 'run_gates', tool_name: name, risk_level: result.risk, safe: result.decision === 'allow', summary: `${result.gate}: ${result.decision} — ${result.reason}` });

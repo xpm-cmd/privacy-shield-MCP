@@ -11,6 +11,7 @@
 import { writeFile, readFile, mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { analyzePrivacy } from './privacy.js';
 // ============================================================
 // Configuración
 // ============================================================
@@ -50,24 +51,36 @@ async function rotateIfNeeded() {
 // ============================================================
 // Redacción y anonimización
 // ============================================================
+// Keys are compared after lower-casing and dropping "_" and "-", so privateKey,
+// private_key and PRIVATE-KEY all match "privatekey".
 const SENSITIVE_KEYS = new Set([
-    'password', 'passwd', 'pwd', 'secret', 'token', 'apikey', 'api_key',
-    'apiKey', 'auth', 'authorization', 'credential', 'credentials',
-    'private_key', 'privateKey', 'access_key', 'accessKey', 'session',
-    'cookie', 'jwt', 'bearer', 'key',
+    'password', 'passwd', 'pwd', 'secret', 'token', 'apikey', 'auth', 'authorization',
+    'credential', 'credentials', 'privatekey', 'accesskey', 'secretkey', 'clientsecret',
+    'accesstoken', 'refreshtoken', 'idtoken', 'session', 'cookie', 'setcookie', 'jwt',
+    'bearer', 'key',
 ]);
+// db_password, githubToken, client_secret …
+const SENSITIVE_KEY_SUFFIXES = ['password', 'passwd', 'secret', 'token', 'apikey', 'privatekey', 'accesskey', 'credential', 'credentials'];
+function isSensitiveKey(key) {
+    const k = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return SENSITIVE_KEYS.has(k) || SENSITIVE_KEY_SUFFIXES.some(s => k.endsWith(s));
+}
 function isBase64(value) {
     return value.length > 20 && /^[A-Za-z0-9+/]+=*$/.test(value) && value.length % 4 === 0;
+}
+/** Strings are scanned with the privacy rules: a token inside a logged command is redacted too. */
+function redactString(value) {
+    if (isBase64(value)) {
+        return '[BASE64_REDACTED]';
+    }
+    return analyzePrivacy(value).redacted_text;
 }
 export function redactObject(obj) {
     if (obj === null || obj === undefined) {
         return obj;
     }
     if (typeof obj === 'string') {
-        if (isBase64(obj)) {
-            return '[BASE64_REDACTED]';
-        }
-        return obj;
+        return redactString(obj);
     }
     if (typeof obj !== 'object') {
         return obj;
@@ -77,11 +90,11 @@ export function redactObject(obj) {
     }
     const redacted = {};
     for (const [k, v] of Object.entries(obj)) {
-        if (SENSITIVE_KEYS.has(k.toLowerCase())) {
+        if (isSensitiveKey(k)) {
             redacted[k] = '[REDACTED]';
         }
-        else if (typeof v === 'string' && isBase64(v)) {
-            redacted[k] = '[BASE64_REDACTED]';
+        else if (typeof v === 'string') {
+            redacted[k] = redactString(v);
         }
         else if (typeof v === 'object' && v !== null) {
             redacted[k] = redactObject(v);
@@ -165,7 +178,18 @@ export async function getRecentLogs(count = 50) {
         await ensureLogDir();
         const content = await readFile(LOG_FILE, "utf-8");
         const lines = content.trim().split("\n").filter(Boolean);
-        return lines.slice(-count).map((line) => JSON.parse(line));
+        // Walk back from the newest line; a corrupt line (e.g. a write cut off by a crash)
+        // is skipped instead of hiding the whole log.
+        const entries = [];
+        for (let i = lines.length - 1; i >= 0 && entries.length < count; i--) {
+            try {
+                entries.unshift(JSON.parse(lines[i]));
+            }
+            catch {
+                // skip corrupt line
+            }
+        }
+        return entries;
     }
     catch {
         return [];

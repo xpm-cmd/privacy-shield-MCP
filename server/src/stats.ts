@@ -41,18 +41,41 @@ let loaded = false;
 // Persistence
 // ============================================================
 
+/**
+ * Build valid stats from whatever stats.json holds: every field is checked and a missing
+ * or malformed one falls back to its default, so an old or hand-edited file can't make
+ * recordScan() throw.
+ */
+function sanitizeStats(parsed: unknown): DetectionStats | null {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const p = parsed as Record<string, unknown>;
+  const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+
+  const detectionsByCategory: Record<string, number> = {};
+  const cats = p.detectionsByCategory;
+  if (cats && typeof cats === 'object' && !Array.isArray(cats)) {
+    for (const [k, v] of Object.entries(cats as Record<string, unknown>)) {
+      if (typeof v === 'number' && Number.isFinite(v) && v >= 0) detectionsByCategory[k] = v;
+    }
+  }
+
+  return {
+    totalScans: count(p.totalScans),
+    totalDetections: count(p.totalDetections),
+    avgLatencyMs: count(p.avgLatencyMs),
+    detectionsByCategory,
+    lastUpdated: typeof p.lastUpdated === 'string' ? p.lastUpdated : new Date().toISOString(),
+  };
+}
+
 function loadStats(): void {
   if (loaded) return;
   loaded = true;
   try {
-    const raw = readFileSync(STATS_FILE, 'utf8');
-    const parsed = JSON.parse(raw) as DetectionStats;
-    // Validate shape
-    if (typeof parsed.totalScans === 'number' && typeof parsed.totalDetections === 'number') {
-      stats = parsed;
-    }
+    const sanitized = sanitizeStats(JSON.parse(readFileSync(STATS_FILE, 'utf8')));
+    if (sanitized) stats = sanitized;
   } catch {
-    // No stats file yet — use defaults
+    // No stats file yet (or unreadable JSON) — use defaults
   }
 }
 

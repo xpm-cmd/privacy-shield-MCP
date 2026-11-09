@@ -8,12 +8,40 @@
  * - Audit log de conexiones externas
  */
 import { analyzeFilePath } from './privacy.js';
+// Extensión de archivo sensible. ".env.example" y similares son plantillas sin secretos.
+const SENSITIVE_EXT = String.raw `(?:env(?![\w.-]*\.(?:example|sample|template|dist)\b)|pem|key|crt|pfx|p12|jks)\b`;
+const ENV_FILE = String.raw `\.env(?![\w.-]*\.(?:example|sample|template|dist)\b)\b`;
 const EXFIL_PATTERNS = [
     // Envío de archivos sensibles por red
     {
-        pattern: /curl\s+.*(-d|--data|--data-binary|--data-raw)\s+.*@\s*[^\s]+\.(env|pem|key|crt|pfx|p12|jks)/i,
+        // curl -d @.env URL, --data-binary @~/.ssh/key.pem …
+        pattern: new RegExp(String.raw `\bcurl\b[^|;&\n]*\s(?:-d|--data(?:-binary|-raw|-urlencode|-ascii)?)[\s=]+\S*@\S*\.` + SENSITIVE_EXT, 'i'),
         technique: "HTTP POST de archivo sensible",
         desc: "Envío de archivo de credenciales/certificado vía curl",
+        risk: "critical",
+        data_type: "credentials",
+    },
+    {
+        // curl -T .env URL, wget --post-file=.env URL
+        pattern: new RegExp(String.raw `\b(?:curl\b[^|;&\n]*\s(?:-T|--upload-file)|wget\b[^|;&\n]*\s--(?:post|body)-file)[\s=]+\S*\.` + SENSITIVE_EXT, 'i'),
+        technique: "HTTP upload de archivo sensible",
+        desc: "Subida de archivo de credenciales/certificado vía curl/wget",
+        risk: "critical",
+        data_type: "credentials",
+    },
+    {
+        // Invoke-RestMethod … -InFile .env
+        pattern: new RegExp(String.raw `\b(?:invoke-restmethod|invoke-webrequest|irm|iwr)\b[^|;\n]*-infile\s+\S*\.` + SENSITIVE_EXT, 'i'),
+        technique: "PowerShell upload de archivo sensible",
+        desc: "Envío de archivo de credenciales vía Invoke-RestMethod/WebRequest -InFile",
+        risk: "critical",
+        data_type: "credentials",
+    },
+    {
+        // Get-Content .env | Invoke-RestMethod …, type .env | curl …
+        pattern: new RegExp(String.raw `\b(?:get-content|gc|cat|type)\s+[^|;\n]*\.` + SENSITIVE_EXT + String.raw `[^|;\n]*\|\s*(?:invoke-restmethod|invoke-webrequest|irm|iwr|curl|wget|nc|ncat)\b`, 'i'),
+        technique: "Lectura de archivo sensible + envío por red",
+        desc: "Contenido de archivo de credenciales enviado por pipeline a un comando de red",
         risk: "critical",
         data_type: "credentials",
     },
@@ -104,9 +132,9 @@ const EXFIL_PATTERNS = [
         risk: "high",
         data_type: "tunnel",
     },
-    // Lectura y envío de archivos de entorno
+    // Lectura y envío de archivos de entorno (cat en Unix, type/Get-Content en Windows)
     {
-        pattern: /cat\s+[^\s]*\.env\b/i,
+        pattern: new RegExp(String.raw `\b(?:cat|type|more|get-content|gc)\s+[^\s|;]*` + ENV_FILE, 'i'),
         technique: "Lectura de .env",
         desc: "Lectura de archivo .env (contiene secretos)",
         risk: "high",
@@ -195,15 +223,22 @@ export function analyzeExfiltration(text) {
                 maxRisk = ep.risk;
         }
     }
-    // Buscar archivos sensibles mencionados (Unix + Windows paths)
+    // Buscar archivos sensibles mencionados (Unix + Windows paths, y nombres sueltos como
+    // ".env", "@.env" o ".\.env" que aparecen como argumentos de comandos)
     const filePathRegex = /(?:\/[\w.-]+)+|~\/[\w./-]+|\.\/[\w./-]+|[A-Za-z]:\\[\w.\\ -]+|\\\\[\w.\\ -]+/g;
-    const filePaths = text.match(filePathRegex) || [];
+    const bareFileRegex = /(?:^|[\s@='"(<])((?:[\w~.-]*[\\/])*(?:\.env(?:\.[\w-]+)*|id_(?:rsa|ed25519|ecdsa|dsa)|[\w-]+\.(?:pem|key|p12|pfx)))(?=$|[\s'")|;,>])/gi;
+    const isEnvTemplate = (p) => /\.env(?:\.[\w-]+)*\.(?:example|sample|template|dist)$/i.test(p);
+    const filePaths = [...new Set([
+            ...(text.match(filePathRegex) || []),
+            ...[...text.matchAll(bareFileRegex)].map(m => m[1]),
+        ])].filter(fp => !isEnvTemplate(fp));
+    // Comandos de red como palabras completas: "nc" dentro de "include" no es netcat.
+    const hasNetworkCmd = /\b(?:curl|wget|nc|ncat|netcat|socat|scp|sftp|rsync|ftp|fetch|requests|invoke-restmethod|invoke-webrequest|irm|iwr)\b|https?:\/\//i.test(text);
     for (const fp of filePaths) {
         const analysis = analyzeFilePath(fp.replace(/\\/g, "/"));
         if (analysis.is_sensitive) {
             filesAtRisk.push({ path: fp, reason: analysis.reason });
             // Si el archivo sensible aparece junto con comandos de red, es exfiltración
-            const hasNetworkCmd = /curl|wget|nc|ncat|scp|rsync|fetch|requests|http/i.test(text);
             if (hasNetworkCmd) {
                 findings.push({
                     technique: "Archivo sensible + comando de red",

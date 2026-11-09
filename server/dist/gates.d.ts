@@ -7,7 +7,10 @@
 import type { GateDecision } from './types.js';
 export interface GateConfig {
     diffSizeThreshold?: number;
+    /** Tools allowed to run; entries ending in `*` match by prefix. Needs `toolName`. */
     allowedTools?: string[];
+    /** Tool being evaluated against `allowedTools`. */
+    toolName?: string;
     customSecretPatterns?: Array<{
         pattern: RegExp;
         name: string;
@@ -32,21 +35,26 @@ export declare function diffSizeGate(content: string, threshold?: number): GateD
  */
 export declare function toolAllowlistGate(toolName: string, allowedTools: string[]): GateDecision | null;
 /**
- * Scans content for hard-coded secrets using built-in patterns.
+ * Scans content for hard-coded secrets: every secret rule of privacy.ts, the gate's own
+ * patterns and any custom patterns.
  *
  * @param content - The text content to scan.
+ * @param customPatterns - Extra patterns, e.g. internal token formats.
  * @returns A blocking GateDecision or null if no secrets detected.
  */
-export declare function secretDetectionGate(content: string): GateDecision | null;
+export declare function secretDetectionGate(content: string, customPatterns?: Array<{
+    pattern: RegExp;
+    name: string;
+}>): GateDecision | null;
 /**
  * Given an array of gate results (some may be null), returns the single
  * most restrictive decision, or null if every gate passed.
  */
 export declare function aggregateGates(results: (GateDecision | null)[]): GateDecision | null;
 /**
- * Convenience function that runs diffSizeGate and secretDetectionGate on the
- * provided content, aggregates the results, and returns the most restrictive
- * decision (or null if everything passes).
+ * Runs diffSizeGate, secretDetectionGate and, when `allowedTools` and `toolName` are
+ * given, toolAllowlistGate; returns the most restrictive decision (or null if
+ * everything passes).
  *
  * @param content - Text content to evaluate.
  * @param config  - Optional gate configuration overrides.
